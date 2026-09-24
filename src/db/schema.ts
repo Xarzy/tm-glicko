@@ -1,52 +1,36 @@
-import { relations } from "drizzle-orm";
-import { integer, sqliteTable, text, primaryKey } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, integer, text, real, primaryKey } from 'drizzle-orm/sqlite-core';
 
-export const wordlesTable = sqliteTable('wordles', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  gameNumber: integer('game_number').notNull().unique(),
-});
+export const ratingModeValues = ['qualifying', 'cup'] as const;
+export type RatingMode = typeof ratingModeValues[number];
 
-export const playersTable = sqliteTable('players', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  discordId: text('discord_id').notNull().unique(),
-  discordName: text('discord_name').notNull(),
-});
-
-export const scoresTable = sqliteTable('scores', {
-  discordId: text('discord_id').notNull().references(() => playersTable.discordId),
-  gameNumber: integer('game_number').notNull().references(() => wordlesTable.gameNumber),
-  attempts: text('attempts').notNull(),
-  isWin: integer('is_win').default(0),
-  isTie: integer('is_tie').default(0),
+export const playerRatingStateTable = sqliteTable('player_rating_state', {
+  accountId: text('account_id').notNull(),
+  mode: text('mode', { enum: ratingModeValues }).notNull(),
+  rating: real('rating').notNull().default(1500),
+  rd: real('rd').notNull().default(350),
+  vol: real('vol').notNull().default(0.06),
+  matchCount: integer('match_count').notNull().default(0),
+  peakRating: real('peak_rating').notNull().default(1500),
+  previousRating: real('previous_rating'),
+  lastProcessedCupId: integer('last_processed_cup_id'),
+  lastFetchedAt: integer('last_fetched_at', { mode: 'timestamp' }),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 }, (table) => ({
-  pk: primaryKey({ columns: [table.discordId, table.gameNumber] })
+  pk: primaryKey({ columns: [table.accountId, table.mode] }),
 }));
 
-export const playerScoresRelations = relations(playersTable, ({ many }) => ({
-  scores: many(scoresTable)
-}));
+export const cotdDaysTable = sqliteTable('cotd_days', {
+  cupId: integer('cup_id').primaryKey(),
+  cotdDate: text('cotd_date').notNull().unique(),
+  competitionId: integer('competition_id').notNull(),
+  name: text('name').notNull(),
+  startDate: integer('start_date', { mode: 'timestamp' }).notNull(),
+  qualifierChallengeId: integer('qualifier_challenge_id'),
+  cardinal: integer('cardinal'),
+  processedAt: integer('processed_at', { mode: 'timestamp' }),
+});
 
-export const scoresRelations = relations(scoresTable, ({ one }) => ({
-  player: one(playersTable, {
-    fields: [scoresTable.discordId],
-    references: [playersTable.discordId]
-  }),
-  wordle: one(wordlesTable, {
-    fields: [scoresTable.gameNumber],
-    references: [wordlesTable.gameNumber]
-  })
-}));
-
-export const wordleRelations = relations(wordlesTable, ({ many }) => ({
-  scores: many(scoresTable)
-}));
-
-export type InsertWordle = typeof wordlesTable.$inferInsert;
-export type SelectWordle = typeof wordlesTable.$inferSelect;
-
-export type InsertPlayer = typeof playersTable.$inferInsert;
-export type SelectPlayer = typeof playersTable.$inferSelect;
-
-export type InsertScore = typeof scoresTable.$inferInsert;
-export type SelectScore = typeof scoresTable.$inferSelect;
-export type SelectScoreWithRelations = SelectScore & { player: SelectPlayer };
+export type InsertPlayerRatingState = typeof playerRatingStateTable.$inferInsert;
+export type SelectPlayerRatingState = typeof playerRatingStateTable.$inferSelect;
+export type InsertCotdDay = typeof cotdDaysTable.$inferInsert;
+export type SelectCotdDay = typeof cotdDaysTable.$inferSelect;

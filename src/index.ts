@@ -1,130 +1,98 @@
-import { Client, Events, GatewayIntentBits } from 'discord.js';
-import * as db from './db';
-import type { SelectScoreWithRelations } from './db/schema';
+import { Client, GatewayIntentBits, Collection, Events, MessageFlags, REST, Routes } from 'discord.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
-});
-const wordlePattern = /Wordle (\d{0,3}(,?)\d{1,3}) (🎉 ?)?([X1-6])\/6/;
-type WordleResult = {
-  discordId: string;
-  userName: string;
-  gameNumber: number;
-  attempts: string;
-};
-let wordleResults: WordleResult[] = [];
-
-client.once(Events.ClientReady, async (readyClient) => {
-  console.log(`Logged in as ${readyClient.user?.tag}`);
-});
-
-client.on(Events.MessageCreate, async (message) => {
-  const parsedWordle = parseWordleResult(message);
-  if (parsedWordle) {
-    const currentResults = await processLatestWordleResult(parsedWordle);
-    await processCurrentResults(currentResults, message);
-  } else {
-    console.log('Message was determined to not be intended for the bot');
-  }
-});
-
-await client.login(process.env.DISCORD_BOT_TOKEN);
-
-function parseWordleResult(message: any): WordleResult | undefined {
-  const userName = message.author.username;
-  const discordId = message.author.id;
-  const match = wordlePattern.exec(message.content);
-
-  if (match) {
-    const gameNumber = parseInt(match[1].replace(/,/g, ''));
-    const attempts = match[4];
-
-    return {
-      discordId,
-      userName,
-      gameNumber,
-      attempts,
-    };
-  }
-
-  return undefined;
+interface Command {
+  data: { name: string; toJSON(): unknown }; // loose on purpose — matches any SlashCommandBuilder variant
+  execute: (interaction: ChatInputCommandInteraction) => Promise<void>;
 }
 
-async function processLatestWordleResult(parsedWordle: WordleResult): Promise<SelectScoreWithRelations[]> {
-  // Prevent duplicates
-  const scoresForCurrentGame = await db.getScoresByGameNumber(parsedWordle.gameNumber);
-  const existingResultForUser = scoresForCurrentGame.find((score: SelectScoreWithRelations) => score.discordId === parsedWordle.discordId);
-  if (!existingResultForUser) {
-    await db.createPlayer(parsedWordle.discordId, parsedWordle.userName);
-    if(scoresForCurrentGame.length === 0) {
-      await db.createWordle(parsedWordle.gameNumber);
-    }
-    const addedScore = await db.createScore(parsedWordle.discordId, parsedWordle.gameNumber, parsedWordle.attempts);
-    if(addedScore){
-      scoresForCurrentGame.push(addedScore);
-    } else {
-      console.error(`Error adding result to the database: ${parsedWordle.gameNumber} - ${parsedWordle.userName}`);
-    }
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const commands = new Collection<string, Command>();
+
+// --- Process-level safety nets (from the freeze/logging fix earlier) ---
+process.on('unhandledRejection', (reason) => {
+  console.error(`[${new Date().toISOString()}] UNHANDLED REJECTION:`, reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error(`[${new Date().toISOString()}] UNCAUGHT EXCEPTION:`, err);
+});
+
+// --- Load every command module from src/commands/ ---
+const commandsPath = join(import.meta.dir, 'commands');
+const commandFiles = readdirSync(commandsPath).filter(f => f.endsWith('.ts'));
+
+for (const file of commandFiles) {
+  const filePath = join(commandsPath, file);
+  // pathToFileURL matters on Windows specifically — a bare absolute path
+  // (C:\...) can fail dynamic import() under strict ESM; the file:// form is safe cross-platform.
+  const commandModule = (await import(pathToFileURL(filePath).href)) as Command;
+
+  if ('data' in commandModule && 'execute' in commandModule) {
+    commands.set(commandModule.data.name, commandModule);
   } else {
-    console.log(`Result already exists: ${parsedWordle.gameNumber} - ${parsedWordle.userName}`);
+    console.warn(`[commands] ${file} is missing "data" or "execute" — skipped`);
   }
-  return scoresForCurrentGame;
 }
 
-async function processCurrentResults(currentResults: SelectScoreWithRelations[], message: any) {
+// --- Register slash commands with Discord ---
+async function registerCommands() {
+  const token = process.env.DISCORD_TOKEN!;
+  const clientId = process.env.DISCORD_CLIENT_ID!;
+  const guildId = process.env.DISCORD_GUILD_ID; // optional — set during dev for instant registration to one server
+
+  const rest = new REST().setToken(token);
+  const body = commands.map(c => c.data.toJSON());
+
   try {
-    if (currentResults.length > 0) {
-      const winners: SelectScoreWithRelations[] = await determineWinners(currentResults);
-      if (winners.length > 0) {
-        await informLatestResults(winners, message);
-      }
+    if (guildId) {
+      await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body });
+      console.log(`[commands] registered ${body.length} command(s) to guild ${guildId}`);
     } else {
-      console.log('No results from processing the latest Wordle result.');
+      await rest.put(Routes.applicationCommands(clientId), { body });
+      console.log(`[commands] registered ${body.length} command(s) globally (can take up to 1hr to propagate)`);
     }
   } catch (error) {
-    console.error('Error processing Wordle Result:', error);
+    console.error('[commands] registration failed:', error);
   }
 }
 
-async function determineWinners(results: SelectScoreWithRelations[]): Promise<SelectScoreWithRelations[]> {
-  if (!results || results.length === 0) return [];
+// --- Event handlers ---
+client.once(Events.ClientReady, async (readyClient) => {
+  console.log(`[bot] logged in as ${readyClient.user.tag}`);
+  await registerCommands();
+});
 
-  // Filter out failed attempts (X) before processing
-  const validResults = results.filter(score => score.attempts.toUpperCase() !== 'X');
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
 
-  if (validResults.length === 0) return [];
+  const command = commands.get(interaction.commandName);
+  if (!command) {
+    console.warn(`[bot] no handler for command "${interaction.commandName}"`);
+    return;
+  }
 
-  // Convert attempts to numbers for comparison
-  const resultsWithNumericAttempts = validResults.map(result => ({
-    ...result,
-    numericAttempts: parseInt(result.attempts)
-  }));
+  try {
+    await command.execute(interaction);
+  } catch (error) {
+    console.error(`[bot] error executing "${interaction.commandName}":`, error);
 
-  // Find minimum attempts
-  const minAttempts = Math.min(
-    ...resultsWithNumericAttempts.map(result => result.numericAttempts)
-  );
+    try {
+      if (interaction.deferred || interaction.replied) {
+        // Ephemeral can only be set on the *first* reply/defer, not retroactively —
+        // every current command defers non-ephemerally, so this just edits that reply.
+        await interaction.editReply({ content: 'Something went wrong running that command.' });
+      } else {
+        await interaction.reply({ content: 'Something went wrong running that command.', flags: MessageFlags.Ephemeral });
+      }
+    } catch (replyError) {
+      // Covers the "Unknown interaction" (code 10062) case from before — the
+      // interaction already expired. Nothing more to do besides log it.
+      console.error(`[bot] failed to send error reply for "${interaction.commandName}":`, replyError);
+    }
+  }
+});
 
-  // Return all scores that match minimum attempts
-  return validResults.filter((_, index) =>
-    resultsWithNumericAttempts[index].numericAttempts === minAttempts
-  );
-}
-
-async function informLatestResults(winners: SelectScoreWithRelations[], message: any) {
-  const winnerDiscordIds = winners.map(winner => winner.discordId);
-  const winnerDiscordTags = winnerDiscordIds.map(id => `<@${id}>`);
-
-  const gameNumber = winners[0].gameNumber || 1;
-  const winningAttempts = winners[0].attempts === 'X' ? 0 : parseInt(winners[0].attempts);
-  const winnerTags = winnerDiscordTags.join(', ');
-
-  const winnerMessage = `Current Winner${winners.length > 1 ? "s" : ""} for Wordle ${gameNumber.toLocaleString()} with ${winningAttempts} attempt${winningAttempts !== 0 && winningAttempts > 1 ? 's' : ''}: ${winnerTags}`;
-
-  console.log(winnerMessage);
-  await message.channel.send(winnerMessage);
-}
+client.login(process.env.DISCORD_TOKEN);
