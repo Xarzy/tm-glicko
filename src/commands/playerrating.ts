@@ -1,6 +1,9 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, AttachmentBuilder } from 'discord.js';
 import { findAccountIdByUsername } from '../services/accountLookup';
 import { getPlayerRatingState, getRatingRank, getCotdDayById } from '../db';
+import { getPlayerTier } from '../services/rankService';
+import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 
 export const data = new SlashCommandBuilder()
   .setName('playerrating')
@@ -8,8 +11,8 @@ export const data = new SlashCommandBuilder()
   .addStringOption(o => o.setName('username').setDescription('Exact Trackmania username.').setRequired(true));
 
 function getUncertaintyCategory(rd: number): string {
-  if (rd < 100) return 'very low'
-  if (rd < 130) return 'low'
+  if (rd < 100) return 'very low';
+  if (rd < 130) return 'low';
   if (rd < 150) return 'low-moderate';
   if (rd < 175) return 'moderate';
   if (rd < 200) return 'moderate-high';
@@ -39,7 +42,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const { rank } = await getRatingRank('qualifying', state.rating);
+  const { rank, total } = await getRatingRank('qualifying', state.rating);
+  const tierInfo = await getPlayerTier(state.rating, rank, total);
+
   const ratingChange =
     state.previousRating !== null
       ? state.rating - state.previousRating
@@ -61,17 +66,22 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   const uncertaintyDesc = `${getUncertaintyCategory(state.rd)} ( ${Math.round(state.rd)} )`;
 
   const embed = new EmbedBuilder()
-    .setColor(0x00ff00)
+    .setColor(tierInfo.rank.tierColor)
     .setTitle(`${username} Rating Info`)
     .addFields(
+      {
+        name: 'Competitive Rank',
+        value: `**${tierInfo.fullName}** (Top ${tierInfo.topPercentage}%)`,
+        inline: false,
+      },
       {
         name: 'Glicko-2 Rating',
         value: `${Math.round(state.rating)}`,
         inline: true,
       },
       {
-        name: 'Rank',
-        value: `${rank}`,
+        name: 'Leaderboard Rank',
+        value: `#${rank} of ${total}`,
         inline: true,
       },
       {
@@ -92,9 +102,17 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       {
         name: 'Rating Uncertainty',
         value: uncertaintyDesc,
-        inline: false,
+        inline: true,
       }
     );
 
-  await interaction.editReply({ embeds: [embed] });
+  const files: AttachmentBuilder[] = [];
+  const iconPath = join(process.cwd(), tierInfo.iconPath);
+  if (existsSync(iconPath)) {
+    const attachment = new AttachmentBuilder(iconPath, { name: tierInfo.rank.iconFile });
+    embed.setThumbnail(`attachment://${tierInfo.rank.iconFile}`);
+    files.push(attachment);
+  }
+
+  await interaction.editReply({ embeds: [embed], files });
 }
