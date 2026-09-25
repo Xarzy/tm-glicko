@@ -4,8 +4,55 @@ import {
   AttachmentBuilder,
 } from 'discord.js';
 import { Resvg } from '@resvg/resvg-js';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { findAccountIdsByUsernames } from '../services/accountLookup';
 import { getRatingHistoryForAccounts } from '../db';
+import { getRankThresholdBands, type RankThresholdBand } from '../services/rankService';
+
+const IMAGES_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../images');
+const rankIconDataUriCache = new Map<string, string | null>();
+
+function bytesToBase64(bytes: Uint8Array): string {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64');
+}
+
+function getRankIconDataUri(iconFile: string | undefined): string | null {
+  if (!iconFile) return null;
+  if (rankIconDataUriCache.has(iconFile)) {
+    return rankIconDataUriCache.get(iconFile) ?? null;
+  }
+
+  const iconPath = join(IMAGES_DIR, iconFile);
+  if (!existsSync(iconPath)) {
+    rankIconDataUriCache.set(iconFile, null);
+    return null;
+  }
+
+  // Browsers can load file:// images in raw SVG, but resvg on Windows cannot.
+  // Embed a small rasterized PNG so the Discord attachment actually includes the icon.
+  const sourceBytes = new Uint8Array(readFileSync(iconPath));
+  const sourceUri = `data:image/png;base64,${bytesToBase64(sourceBytes)}`;
+  const iconSvg = `
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="48" height="48">
+      <image href="${sourceUri}" xlink:href="${sourceUri}" width="48" height="48" preserveAspectRatio="xMidYMid meet" />
+    </svg>
+  `.trim();
+
+  try {
+    const raster = new Resvg(iconSvg, {
+      fitTo: { mode: 'width', value: 48 },
+      imageRendering: 0,
+    }).render().asPng();
+    const dataUri = `data:image/png;base64,${bytesToBase64(new Uint8Array(raster))}`;
+    rankIconDataUriCache.set(iconFile, dataUri);
+    return dataUri;
+  } catch {
+    rankIconDataUriCache.set(iconFile, sourceUri);
+    return sourceUri;
+  }
+}
 
 export const data = new SlashCommandBuilder()
   .setName('graphrating')
@@ -19,10 +66,10 @@ export const data = new SlashCommandBuilder()
 
 // Palette of vibrant colors matching the dark theme in the reference
 const COLORS = [
-  '#9d4edd', // Purple (like ErTobby)
-  '#00f5d4', // Cyan (like Gevty)
-  '#ffd166', // Gold / Pale Yellow (like Ivancicus)
-  '#ff0054', // Neon Red / Pink (like XarzyTM)
+  '#9d4edd', // Purple
+  '#00f5d4', // Cyan
+  '#ffd166', // Gold / Pale Yellow
+  '#ff0054', // Neon Red / Pink
   '#3a86ff', // Bright Blue
   '#06d6a0', // Mint Green
   '#ffbe0b', // Amber
@@ -130,7 +177,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   }
 
   // 3. Render SVG and rasterize to high-resolution PNG (2x supersampling for crisp text and lines)
-  const svg = renderRatingChart(playerSeries);
+  const bands = await getRankThresholdBands();
+  const svg = renderRatingChartWithRankZones(playerSeries, bands);
   const resvg = new Resvg(svg, {
     fitTo: { mode: 'width', value: 2400 },
     font: {
@@ -157,7 +205,10 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   });
 }
 
-function renderRatingChart(series: PlayerData[]): string {
+function renderRatingChartWithRankZones(
+  series: PlayerData[],
+  bands: RankThresholdBand[],
+): string {
   const width = 1300;
   const height = 800;
   const margin = { top: 60, right: 160, bottom: 90, left: 80 };
@@ -196,11 +247,14 @@ function renderRatingChart(series: PlayerData[]): string {
   const getY = (r: number) => margin.top + plotH - ((r - minRating) / ratingSpan) * plotH;
 
   // Rating grid lines (step of 100)
-  let gridSvg = '';
+  let gridLinesSvg = '';
+  let axisLabelsSvg = '';
   for (let r = minRating; r <= maxRating; r += 100) {
     const y = getY(r);
-    gridSvg += `
+    gridLinesSvg += `
       <line x1="${margin.left}" y1="${y}" x2="${margin.left + plotW}" y2="${y}" stroke="#1f232b" stroke-dasharray="3,4" stroke-width="1" />
+    `;
+    axisLabelsSvg += `
       <text x="${margin.left - 12}" y="${y + 4}" fill="#717a8a" font-size="11" text-anchor="end" font-family="monospace">${r}</text>
     `;
   }
@@ -211,11 +265,66 @@ function renderRatingChart(series: PlayerData[]): string {
     const t = minTime + (timeSpan / numTimeTicks) * i;
     const x = getX(t);
     const dateStr = new Date(t).toISOString().slice(0, 10);
-    gridSvg += `
+    gridLinesSvg += `
       <line x1="${x}" y1="${margin.top + plotH}" x2="${x}" y2="${margin.top + plotH + 6}" stroke="#333a45" stroke-width="1" />
+    `;
+    axisLabelsSvg += `
       <text x="${x}" y="${margin.top + plotH + 24}" fill="#717a8a" font-size="10" text-anchor="middle" font-family="monospace">${dateStr}</text>
     `;
   }
+
+  // Rank zone backgrounds (behind grid/lines). Icons are embedded as data URIs
+  // because resvg does not reliably load file:// images on Windows.
+  const iconSize = 22;
+  const visibleBands = (bands ?? [])
+    .map((b) => {
+      const bandMin = Math.max(minRating, b.minRating);
+      const bandMax = Math.min(maxRating, b.maxRating);
+      if (bandMax <= bandMin) return null;
+
+      const yTop = getY(bandMax);
+      const yBottom = getY(bandMin);
+      const h = Math.max(0, yBottom - yTop);
+      if (h < 1) return null;
+
+      return { ...b, yTop, h };
+    })
+    .filter((b): b is NonNullable<typeof b> => b !== null);
+
+  const rankZonesSvg = visibleBands
+    .map((b) => {
+      const fill = b.rank.svgColor;
+      // Slightly visible label on the right side of the plot (near threshold)
+      // keep it subtle so it doesn't clutter the chart
+      const label = b.rank.shortName;
+      return `
+        <rect x="${margin.left}" y="${b.yTop}" width="${plotW}" height="${b.h}" fill="${fill}" fill-opacity="0.20" stroke="${fill}" stroke-opacity="0.55" stroke-width="1" />
+        <line x1="${margin.left}" y1="${b.yTop}" x2="${margin.left + plotW}" y2="${b.yTop}" stroke="${fill}" stroke-opacity="0.85" stroke-width="1.6" />
+      `;
+    })
+    .join('\n');
+
+  const rankIconsSvg = visibleBands
+    .map((b) => {
+      const dataUri = getRankIconDataUri(b.rank.iconFile);
+      if (!dataUri) return '';
+
+      const size = Math.min(iconSize, Math.max(10, b.h - 2));
+      const iconX = margin.left + 8;
+      const iconY = b.yTop + Math.max(0, (b.h - size) / 2);
+      return `
+        <image
+          x="${iconX.toFixed(2)}"
+          y="${iconY.toFixed(2)}"
+          width="${size.toFixed(2)}"
+          height="${size.toFixed(2)}"
+          href="${dataUri}"
+          xlink:href="${dataUri}"
+          preserveAspectRatio="xMidYMid meet"
+        />
+      `;
+    })
+    .join('\n');
 
   // Draw lines for each player (stepped line like Trackmania Glicko)
   let linesSvg = '';
@@ -300,7 +409,13 @@ function renderRatingChart(series: PlayerData[]): string {
   `;
 
   return `
-    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" style="background-color: #060709;">
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" style="background-color: #060709;">
+      <defs>
+        <clipPath id="plotClip">
+          <rect x="${margin.left}" y="${margin.top}" width="${plotW}" height="${plotH}" />
+        </clipPath>
+      </defs>
+
       <!-- Title -->
       <text x="${width / 2}" y="36" fill="#e6edf3" font-size="16" font-weight="600" text-anchor="middle" font-family="sans-serif">
         Glicko-2 Rating History for TM Players
@@ -320,11 +435,17 @@ function renderRatingChart(series: PlayerData[]): string {
       <line x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${margin.top + plotH}" stroke="#2b313a" stroke-width="1" />
       <line x1="${margin.left}" y1="${margin.top + plotH}" x2="${margin.left + plotW}" y2="${margin.top + plotH}" stroke="#2b313a" stroke-width="1" />
 
-      <!-- Grid -->
-      ${gridSvg}
+      <g clip-path="url(#plotClip)">
+        ${rankZonesSvg}
+        ${gridLinesSvg}
+        ${rankIconsSvg}
+        ${linesSvg}
+      </g>
 
-      <!-- Lines -->
-      ${linesSvg}
+      ${axisLabelsSvg}
+
+      <!-- Rank icons above lines/legend so they stay visible in the PNG -->
+      ${rankIconsSvg}
 
       <!-- End labels -->
       ${labelsSvg}
