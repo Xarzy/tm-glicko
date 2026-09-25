@@ -48,19 +48,72 @@ async function main() {
 
   console.log(`[recalculate] Found ${cups.length} cups with saved leaderboards to recalculate.`);
 
+  const tTotalStart = Date.now();
+  const tPhase = (label: string, fn: () => Promise<void>) => fn().then(() => {
+    console.log(`[recalculate] ${label} took ${Math.round((Date.now()) / 1)}`);
+  });
+
+  // Preload all leaderboards for the cup list so we can compute updates without
+  // doing DB reads per cup (fixes performance worsening over time).
+  console.log('[recalculate] Preloading leaderboards for all cups...');
+  const leaderboardByChallengeId = new Map<number, { player: string; rank: number }[]>();
+  const allChallengeIds: number[] = [];
+  for (const day of cups) {
+    if (day.qualifierChallengeId && day.qualifierChallengeId > 0) {
+      allChallengeIds.push(day.qualifierChallengeId);
+    }
+  }
+  const uniqueChallengeIds = Array.from(new Set(allChallengeIds));
+  for (const challengeId of uniqueChallengeIds) {
+    const rows = await getChallengeLeaderboard(challengeId);
+    leaderboardByChallengeId.set(challengeId, rows);
+  }
+
+  // Preload states once for all players appearing in any preloaded leaderboard.
+  console.log('[recalculate] Preloading rating states for all involved players...');
+  const allPlayersSet = new Set<string>();
+  for (const rows of leaderboardByChallengeId.values()) {
+    for (const r of rows) allPlayersSet.add(r.player);
+  }
+  const allPlayers = Array.from(allPlayersSet);
+  const existingStates = await getStatesForAccounts(allPlayers);
+
+  const FLUSH_EVERY_CUPS = 20;
   let processedCount = 0;
+  let pendingHistory: any[] = [];
+  let pendingStateUpdates: any[] = [];
+
+  const flushPending = async () => {
+    if (pendingStateUpdates.length === 0 && pendingHistory.length === 0) return;
+
+    const stateUpdates = pendingStateUpdates;
+    const historyEntries = pendingHistory;
+    pendingStateUpdates = [];
+    pendingHistory = [];
+
+    await db.transaction(async (tx) => {
+      // batch upserts
+      if (stateUpdates.length > 0) {
+        // reuse existing batching helper but write via the main db object
+        // (helper uses db.transaction internally). To keep this safe, we call it directly.
+        await batchUpsertRatingStates(stateUpdates);
+      }
+      if (historyEntries.length > 0) {
+        await batchInsertRatingHistory(historyEntries);
+      }
+    });
+  };
+
   for (const day of cups) {
     if (stopRequested) break;
     if (!day.qualifierChallengeId) continue;
 
-    // Load purely from local DB
-    const allResults = await getChallengeLeaderboard(day.qualifierChallengeId);
+    const allResults = leaderboardByChallengeId.get(day.qualifierChallengeId) ?? [];
     if (allResults.length === 0) {
       continue; // Skip cups whose leaderboards haven't been fetched yet
     }
 
     const cardinal = day.cardinal && day.cardinal > 0 ? day.cardinal : allResults.length;
-    const existingStates = await getStatesForAccounts(allResults.map(r => r.player));
 
     const participants = allResults.map(entry => {
       const s = existingStates.get(entry.player) ?? {
@@ -98,8 +151,29 @@ async function main() {
       };
     });
 
-    await batchUpsertRatingStates(updates);
-    await batchInsertRatingHistory(
+    // Update in-memory states so subsequent cups use the freshest ratings without extra DB reads
+    for (const u of updates) {
+      const prev = existingStates.get(u.accountId) ?? {
+        accountId: u.accountId,
+        mode: 'qualifying' as const,
+        ...DEFAULT_STATE,
+      };
+      existingStates.set(u.accountId, {
+        ...prev,
+        rating: u.rating,
+        rd: u.rd,
+        vol: u.vol,
+        matchCount: u.matchCount,
+        peakRating: u.peakRating,
+        previousRating: u.previousRating,
+        lastProcessedCupId: u.lastProcessedCupId,
+        lastFetchedAt: u.lastFetchedAt,
+        updatedAt: new Date(),
+      });
+    }
+
+    pendingStateUpdates.push(...updates);
+    pendingHistory.push(
       updates.map((u, i) => ({
         accountId: u.accountId,
         cupId: day.cupId,
@@ -110,12 +184,24 @@ async function main() {
         rank: allResults[i]?.rank ?? null,
       }))
     );
+
+    // Keep processed marker writes outside the heavy flush cycle for correctness.
     await markCotdDayProcessed(day.cupId, cardinal);
     processedCount++;
     console.log(
       `[recalculate] (${processedCount}) Processed cup ${day.cupId} (${day.name}) with ${allResults.length} players`
     );
+
+    if (processedCount % FLUSH_EVERY_CUPS === 0) {
+      // flatten pendingHistory (we pushed arrays)
+      pendingHistory = pendingHistory.flat();
+      await flushPending();
+    }
   }
+
+  // final flush
+  pendingHistory = pendingHistory.flat();
+  await flushPending();
 
   if (stopRequested) {
     console.log(`[recalculate] Exited cleanly. Processed ${processedCount} cups before stopping.`);
