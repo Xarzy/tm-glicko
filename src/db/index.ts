@@ -162,15 +162,21 @@ export async function markCotdDayProcessed(cupId: number, cardinal: number) {
 
 export async function getStatesForAccounts(accountIds: string[]): Promise<Map<string, SelectPlayerRatingState>> {
   if (accountIds.length === 0) return new Map();
+  const deduped = Array.from(new Set(accountIds));
   const map = new Map<string, SelectPlayerRatingState>();
-  for (let i = 0; i < accountIds.length; i += CHUNK_SIZE) {
-    const chunk = accountIds.slice(i, i + CHUNK_SIZE);
-    const rows = await db.select().from(playerRatingStateTable)
-      .where(and(inArray(playerRatingStateTable.accountId, chunk), eq(playerRatingStateTable.mode, 'qualifying')));
-    for (const r of rows) {
-      map.set(r.accountId, r);
-    }
+
+  for (let i = 0; i < deduped.length; i += CHUNK_SIZE) {
+    const chunk = deduped.slice(i, i + CHUNK_SIZE);
+    const rows = await db
+      .select()
+      .from(playerRatingStateTable)
+      .where(
+        and(inArray(playerRatingStateTable.accountId, chunk), eq(playerRatingStateTable.mode, 'qualifying'))
+      );
+
+    for (const r of rows) map.set(r.accountId, r);
   }
+
   return map;
 }
 
