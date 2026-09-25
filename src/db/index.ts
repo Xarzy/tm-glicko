@@ -1,14 +1,27 @@
-import { drizzle } from 'drizzle-orm/libsql';
-import { createClient } from '@libsql/client';
+import { drizzle } from 'drizzle-orm/bun-sqlite';
+import { Database } from 'bun:sqlite';
 import { inArray, isNull, asc, sql, eq, and, gt } from 'drizzle-orm';
 import * as schema from './schema';
-import { cotdDaysTable, playerRatingStateTable, type RatingMode, type SelectPlayerRatingState, type InsertCotdDay, type SelectCotdDay } from './schema.ts';
+import {
+  cotdDaysTable,
+  playerRatingStateTable,
+  challengeLeaderboardsTable,
+  playerRatingHistoryTable,
+  type RatingMode,
+  type SelectPlayerRatingState,
+  type InsertCotdDay,
+  type SelectCotdDay,
+  type InsertChallengeLeaderboard,
+  type InsertPlayerRatingHistory,
+} from './schema.ts';
 
-const client = createClient({
-  url: process.env.DB_FILE_NAME!,
-});
-const db = drizzle(client, { schema });
-const CHUNK_SIZE = 1;
+const dbPath = (process.env.DB_FILE_NAME || 'local.db').replace(/^file:/, '');
+const sqlite = new Database(dbPath);
+// Enable WAL mode for better concurrency and performance
+sqlite.exec('PRAGMA journal_mode = WAL;');
+
+export const db = drizzle(sqlite, { schema });
+const CHUNK_SIZE = 500;
 
 const DEFAULT_STATE: Omit<SelectPlayerRatingState, 'accountId' | 'mode' | 'updatedAt'> = {
   rating: 1500,
@@ -93,6 +106,25 @@ export async function getPendingCotdDays(limit: number): Promise<SelectCotdDay[]
     .limit(limit);
 }
 
+export async function getCupsNeedingLeaderboards(): Promise<SelectCotdDay[]> {
+  return db
+    .select()
+    .from(cotdDaysTable)
+    .where(
+      sql`${cotdDaysTable.qualifierChallengeId} IS NULL OR NOT EXISTS (
+        SELECT 1 FROM ${challengeLeaderboardsTable}
+        WHERE ${challengeLeaderboardsTable.challengeId} = ${cotdDaysTable.qualifierChallengeId}
+      )`
+    )
+    .orderBy(asc(cotdDaysTable.startDate));
+}
+
+export async function getCotdDayById(cupId: number): Promise<SelectCotdDay | undefined> {
+  return db.query.cotdDaysTable.findFirst({
+    where: eq(cotdDaysTable.cupId, cupId),
+  });
+}
+
 export async function setQualifierChallengeId(cupId: number, challengeId: number) {
   await db.update(cotdDaysTable).set({ qualifierChallengeId: challengeId }).where(eq(cotdDaysTable.cupId, cupId));
 }
@@ -103,28 +135,108 @@ export async function markCotdDayProcessed(cupId: number, cardinal: number) {
 
 export async function getStatesForAccounts(accountIds: string[]): Promise<Map<string, SelectPlayerRatingState>> {
   if (accountIds.length === 0) return new Map();
-  const rows = await db.select().from(playerRatingStateTable)
-    .where(and(inArray(playerRatingStateTable.accountId, accountIds), eq(playerRatingStateTable.mode, 'qualifying')));
-  return new Map(rows.map(r => [r.accountId, r]));
+  const map = new Map<string, SelectPlayerRatingState>();
+  for (let i = 0; i < accountIds.length; i += CHUNK_SIZE) {
+    const chunk = accountIds.slice(i, i + CHUNK_SIZE);
+    const rows = await db.select().from(playerRatingStateTable)
+      .where(and(inArray(playerRatingStateTable.accountId, chunk), eq(playerRatingStateTable.mode, 'qualifying')));
+    for (const r of rows) {
+      map.set(r.accountId, r);
+    }
+  }
+  return map;
+}
+
+export async function cotdDateExists(cotdDate: string): Promise<boolean> {
+  const row = await db.query.cotdDaysTable.findFirst({ where: eq(cotdDaysTable.cotdDate, cotdDate) });
+  return !!row;
 }
 
 export async function batchUpsertRatingStates(
   updates: (Omit<SelectPlayerRatingState, 'updatedAt'>)[]
 ) {
-  for (let i = 0; i < updates.length; i += CHUNK_SIZE) {
-    const chunk = updates.slice(i, i + CHUNK_SIZE).map(u => ({ ...u, updatedAt: new Date() }));
-    await db.insert(playerRatingStateTable).values(chunk).onConflictDoUpdate({
-      target: [playerRatingStateTable.accountId, playerRatingStateTable.mode],
-      set: {
-        rating: sql`excluded.rating`,
-        rd: sql`excluded.rd`,
-        vol: sql`excluded.vol`,
-        matchCount: sql`excluded.match_count`,
-        peakRating: sql`excluded.peak_rating`,
-        previousRating: sql`excluded.previous_rating`,
-        lastProcessedCupId: sql`excluded.last_processed_cup_id`,
-        updatedAt: sql`excluded.updated_at`,
-      },
-    });
-  }
+  if (updates.length === 0) return;
+  const now = new Date();
+  console.log("batching " + updates.length + " states to the database - batchUpsertRatingStates");
+  await db.transaction(async (tx) => {
+    for (let i = 0; i < updates.length; i += CHUNK_SIZE) {
+      const chunk = updates.slice(i, i + CHUNK_SIZE).map(u => ({ ...u, updatedAt: now }));
+      await tx.insert(playerRatingStateTable).values(chunk).onConflictDoUpdate({
+        target: [playerRatingStateTable.accountId, playerRatingStateTable.mode],
+        set: {
+          rating: sql`excluded.rating`,
+          rd: sql`excluded.rd`,
+          vol: sql`excluded.vol`,
+          matchCount: sql`excluded.match_count`,
+          peakRating: sql`excluded.peak_rating`,
+          previousRating: sql`excluded.previous_rating`,
+          lastProcessedCupId: sql`excluded.last_processed_cup_id`,
+          updatedAt: sql`excluded.updated_at`,
+        },
+      });
+    }
+  });
 }
+
+export async function getChallengeLeaderboard(challengeId: number): Promise<{ player: string; rank: number }[]> {
+  const rows = await db.select({
+    player: challengeLeaderboardsTable.player,
+    rank: challengeLeaderboardsTable.rank,
+  })
+    .from(challengeLeaderboardsTable)
+    .where(eq(challengeLeaderboardsTable.challengeId, challengeId))
+    .orderBy(asc(challengeLeaderboardsTable.rank));
+
+  return rows;
+}
+
+export async function saveChallengeLeaderboard(
+  challengeId: number,
+  results: { player: string; rank: number }[]
+) {
+  if (results.length === 0) return;
+  const rows: InsertChallengeLeaderboard[] = results.map(r => ({
+    challengeId,
+    player: r.player,
+    rank: r.rank,
+  }));
+
+    await db.transaction(async (tx) => {
+    for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+      const chunk = rows.slice(i, i + CHUNK_SIZE);
+      await tx.insert(challengeLeaderboardsTable).values(chunk).onConflictDoNothing();
+    }
+  });
+}
+
+export async function batchInsertRatingHistory(entries: InsertPlayerRatingHistory[]) {
+  if (entries.length === 0) return;
+  await db.transaction(async (tx) => {
+    for (let i = 0; i < entries.length; i += CHUNK_SIZE) {
+      const chunk = entries.slice(i, i + CHUNK_SIZE);
+      await tx.insert(playerRatingHistoryTable).values(chunk);
+    }
+  });
+}
+
+export async function getRatingHistoryForAccounts(
+  accountIds: string[],
+  mode: RatingMode = 'qualifying'
+): Promise<{ accountId: string; cotdDate: string; rating: number; cupId: number }[]> {
+  if (accountIds.length === 0) return [];
+  return db
+    .select({
+      accountId: playerRatingHistoryTable.accountId,
+      cotdDate: playerRatingHistoryTable.cotdDate,
+      rating: playerRatingHistoryTable.rating,
+      cupId: playerRatingHistoryTable.cupId,
+    })
+    .from(playerRatingHistoryTable)
+    .where(
+      and(
+        inArray(playerRatingHistoryTable.accountId, accountIds),
+        eq(playerRatingHistoryTable.mode, mode)
+      )
+    )
+    .orderBy(asc(playerRatingHistoryTable.cotdDate));
+}

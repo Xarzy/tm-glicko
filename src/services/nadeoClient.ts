@@ -9,7 +9,7 @@ let cooldownUntil = 0;
 // Deliberately conservative — no confirmed rate limit for this API/account type,
 // so err toward "slow but safe" given the account-ban risk. Tune down only after
 // watching real logs for a while with no 429s.
-const MIN_DELAY_MS = 400;
+const MIN_DELAY_MS = 200;
 
 async function processQueue() {
   if (processing) return;

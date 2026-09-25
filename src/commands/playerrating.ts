@@ -1,27 +1,35 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import { findAccountIdByUsername } from '../services/accountLookup';
-import { getPlayerRatingState, getRatingRank } from '../db';
+import { getPlayerRatingState, getRatingRank, getCotdDayById } from '../db';
 
 export const data = new SlashCommandBuilder()
   .setName('playerrating')
-  .setDescription("Gets user's Glicko-2 rating from qualifying or cup matches.")
-  .addStringOption(o => o.setName('username').setDescription('Exact Trackmania username.').setRequired(true))
-  .addStringOption(o => o.setName('mode').setDescription('The mode to get the rating for.').setRequired(true)
-    .addChoices({ name: 'Qualifying', value: 'qualifying' }, { name: 'Cup', value: 'cup' }));
+  .setDescription("Gets user's Glicko-2 rating from COTD Qualifying.")
+  .addStringOption(o => o.setName('username').setDescription('Exact Trackmania username.').setRequired(true));
+
+function getUncertaintyCategory(rd: number): string {
+  if (rd < 100) return 'very low'
+  if (rd < 130) return 'low'
+  if (rd < 150) return 'low-moderate';
+  if (rd < 175) return 'moderate';
+  if (rd < 200) return 'moderate-high';
+  if (rd < 225) return 'high';
+  if (rd < 250) return 'very high';
+  return 'extremely high';
+}
+
+function formatDate(date: Date): string {
+  return date.toISOString().split('T')[0];
+}
 
 export async function execute(interaction: ChatInputCommandInteraction) {
   await interaction.deferReply();
 
   const username = interaction.options.getString('username', true);
-  const mode = interaction.options.getString('mode', true);
 
   const accountId = await findAccountIdByUsername(username);
   if (!accountId) {
     await interaction.editReply(`No exact match for **${username}** — check spelling/casing.`);
-    return;
-  }
-  if (mode === 'cup') {
-    await interaction.editReply("Cup rating isn't implemented yet — only qualifying is live.");
     return;
   }
 
@@ -31,13 +39,62 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const { rank, total } = await getRatingRank('qualifying', state.rating);
-  await interaction.editReply(
-    `**${username}** — Qualifying\n` +
-    `Glicko-2 Rating: ${Math.round(state.rating)}\n` +
-    `Rank: #${rank} of ${total}\n` +
-    `Match Count: ${state.matchCount}\n` +
-    `Latest Change: ${state.previousRating !== null ? Math.round(state.rating - state.previousRating) : 'n/a'}\n` +
-    `Peak Rating: ${Math.round(state.peakRating)}`
-  );
+  const { rank } = await getRatingRank('qualifying', state.rating);
+  const ratingChange =
+    state.previousRating !== null
+      ? state.rating - state.previousRating
+      : null;
+
+  let changeDateStr = '';
+  if (state.lastProcessedCupId !== null) {
+    const lastCup = await getCotdDayById(state.lastProcessedCupId);
+    if (lastCup?.startDate) {
+      changeDateStr = ` on ${formatDate(new Date(lastCup.startDate))}`;
+    }
+  }
+
+  const formattedLatestChange =
+    ratingChange !== null
+      ? `${ratingChange >= 0 ? '+' : ''}${ratingChange.toFixed(1)}${changeDateStr}`
+      : 'n/a';
+
+  const uncertaintyDesc = `${getUncertaintyCategory(state.rd)} ( ${Math.round(state.rd)} )`;
+
+  const embed = new EmbedBuilder()
+    .setColor(0x00ff00)
+    .setTitle(`${username} Rating Info`)
+    .addFields(
+      {
+        name: 'Glicko-2 Rating',
+        value: `${Math.round(state.rating)}`,
+        inline: true,
+      },
+      {
+        name: 'Rank',
+        value: `${rank}`,
+        inline: true,
+      },
+      {
+        name: 'Match Count',
+        value: `${state.matchCount}`,
+        inline: true,
+      },
+      {
+        name: 'Latest Change',
+        value: formattedLatestChange,
+        inline: true,
+      },
+      {
+        name: 'Peak Rating',
+        value: `${Math.round(state.peakRating)}`,
+        inline: true,
+      },
+      {
+        name: 'Rating Uncertainty',
+        value: uncertaintyDesc,
+        inline: false,
+      }
+    );
+
+  await interaction.editReply({ embeds: [embed] });
 }

@@ -39,8 +39,8 @@ for (const file of commandFiles) {
 
 // --- Register slash commands with Discord ---
 async function registerCommands() {
-  const token = process.env.DISCORD_TOKEN!;
-  const clientId = process.env.DISCORD_CLIENT_ID!;
+  const token = process.env.DISCORD_BOT_TOKEN!;
+  const clientId = process.env.DISCORD_BOT_CLIENT_ID!;
   const guildId = process.env.DISCORD_GUILD_ID; // optional — set during dev for instant registration to one server
 
   const rest = new REST().setToken(token);
@@ -95,4 +95,4 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+client.login(process.env.DISCORD_BOT_TOKEN);

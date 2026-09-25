@@ -1,45 +1,60 @@
-import { Glicko2 } from 'glicko2.ts';
-import type { CotdCup } from '../types/cotd';
+import { updateGlicko2, type GlickoOpponent } from './glicko2Math';
 
-const ranking = new Glicko2({ rating: 1500, rd: 350, vol: 0.06, tau: 0.5 });
+export interface GlickoState { rating: number; rd: number; vol: number }
 
-// Simplification: one virtual match per qualifying result, against a fixed
-// reference opponent, instead of real pairwise matches against ~2000 people.
-// Tune these two constants once you see real rating spread.
-const FIELD_RATING = 1500;
-const FIELD_RD = 60;
-
-function percentileScore(cup: CotdCup): number {
-  if (cup.totalplayers <= 1) return 0.5;
-  return (cup.totalplayers - cup.qualificationrank) / (cup.totalplayers - 1);
-}
-
-export interface GlickoState {
+export interface ParticipantRank {
+  player: string;
+  rank: number;
   rating: number;
   rd: number;
-  vol: number;
 }
 
-export function applyQualifyingResults(
+/**
+ * Multi-player Tournament Glicko-2 update for Trackmania COTD.
+ * Evaluates performance against the competitive distribution of the field.
+ */
+export function applyQualifyingCupResult(
   state: GlickoState,
-  cupsChronological: CotdCup[] // must be oldest → newest
+  playerRank: number,
+  opponents: ParticipantRank[]
 ): GlickoState {
-  let current = state;
+  const total = opponents.length;
+  if (total <= 1) return state;
 
-  for (const cup of cupsChronological) {
-    const player = ranking.makePlayer(current.rating, current.rd, current.vol);
-    const field = ranking.makePlayer(FIELD_RATING, FIELD_RD);
-    ranking.updateRatings([[player, field, percentileScore(cup)]]);
+  // Normalized percentile: rank 1 is ~0.999, last place is ~0.001
+  const rawPercentile = (total - playerRank) / (total - 1);
+  const percentile = Math.max(0.001, Math.min(0.999, rawPercentile));
 
-    current = { rating: player.getRating(), rd: player.getRd(), vol: player.getVol() };
+  // Compute field distribution
+  let sumRating = 0;
+  let sumRd = 0;
+  for (const o of opponents) {
+    sumRating += o.rating;
+    sumRd += o.rd;
   }
+  const avgRating = sumRating / total;
+  const avgRd = Math.max(50, sumRd / total);
 
-  return current;
-}
+  // Tournament equivalent opponents:
+  // Evaluates the result across standard deviation tiers of the tournament field.
+  // This allows top players (who beat 99.9% of the field) to reliably reach 2800-3200,
+  // while median players stay ~1500 and lower-tier players stay ~800-1100 without collapsing.
+  const SCALE = 173.7178;
+  const spread = [-2.2, -1.6, -1.1, -0.6, -0.2, 0.2, 0.6, 1.1, 1.6, 2.2];
 
-export function applySingleQualifyingResult(state: GlickoState, percentileScore: number): GlickoState {
-  const player = ranking.makePlayer(state.rating, state.rd, state.vol);
-  const field = ranking.makePlayer(FIELD_RATING, FIELD_RD);
-  ranking.updateRatings([[player, field, percentileScore]]);
-  return { rating: player.getRating(), rd: player.getRd(), vol: player.getVol() };
+  const matches: GlickoOpponent[] = spread.map(sigmaOffset => {
+    const oppRating = avgRating + sigmaOffset * SCALE;
+    // Approximated CDF percentile for this tier in a standard field
+    const tierPercentile = 1 / (1 + Math.exp(-sigmaOffset * 1.6));
+    const score = percentile > tierPercentile ? 1.0 : percentile < tierPercentile ? 0.0 : 0.5;
+
+    return {
+      rating: oppRating,
+      rd: avgRd,
+      score,
+    };
+  });
+
+  return updateGlicko2(state.rating, state.rd, state.vol, matches, 0.5);
 }
+
