@@ -1,6 +1,6 @@
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { Database } from 'bun:sqlite';
-import { inArray, isNull, asc, sql, eq, and, gt } from 'drizzle-orm';
+import { inArray, isNotNull, isNull, asc, sql, eq, and, gt } from 'drizzle-orm';
 import * as schema from './schema';
 import {
   cotdDaysTable,
@@ -91,6 +91,33 @@ export async function getRatingRank(
   } catch (error) {
     console.error(error);
     return { rank: 0, total: 0 };
+  }
+}
+
+export async function getPlayerRatingStateByRank(
+  mode: RatingMode,
+  rank: number
+): Promise<{ state: SelectPlayerRatingState; total: number } | null> {
+  try {
+    const totalResult = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(playerRatingStateTable)
+      .where(and(eq(playerRatingStateTable.mode, mode), isNotNull(playerRatingStateTable.lastProcessedCupId)));
+
+    const total = totalResult[0]?.count ?? 0;
+    if (rank < 1 || rank > total) return null;
+
+    const row = await db.query.playerRatingStateTable.findFirst({
+      where: and(eq(playerRatingStateTable.mode, mode), isNotNull(playerRatingStateTable.lastProcessedCupId)),
+      orderBy: [sql`${playerRatingStateTable.rating} DESC`],
+      offset: rank - 1,
+    });
+
+    if (!row) return null;
+    return { state: row, total };
+  } catch (error) {
+    console.error('[getPlayerRatingStateByRank] error:', error);
+    return null;
   }
 }
 
@@ -239,4 +266,4 @@ export async function getRatingHistoryForAccounts(
       )
     )
     .orderBy(asc(playerRatingHistoryTable.cotdDate));
-}
+}
