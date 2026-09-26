@@ -160,9 +160,9 @@ async function processCotdDay(day: SelectCotdDay) {
     };
   });
 
-  const updates = allResults.map(entry => {
+  const updates = allResults.map((entry, playerIndex) => {
     const state = existingStates.get(entry.player) ?? { accountId: entry.player, mode: 'qualifying' as const, ...DEFAULT_STATE };
-    const updated = applyQualifyingCupResult(state, entry.rank, participants);
+    const updated = applyQualifyingCupResult(state, entry.player, entry.rank, participants, playerIndex);
 
     return {
       accountId: entry.player,

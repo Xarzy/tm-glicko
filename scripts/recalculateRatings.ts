@@ -81,31 +81,13 @@ async function main() {
 
   console.log(`[recalculate] Found ${cups.length} cups with saved leaderboards to recalculate.`);
 
-  // Preload all leaderboards for the cup list so we can compute updates without
-  // doing DB reads per cup (fixes performance worsening over time).
-  console.log('[recalculate] Preloading leaderboards for all cups...');
-  const leaderboardByChallengeId = new Map<number, { player: string; rank: number }[]>();
-  const allChallengeIds: number[] = [];
-  for (const day of cups) {
-    if (day.qualifierChallengeId && day.qualifierChallengeId > 0) {
-      allChallengeIds.push(day.qualifierChallengeId);
-    }
-  }
-  const uniqueChallengeIds = Array.from(new Set(allChallengeIds));
-  for (const challengeId of uniqueChallengeIds) {
-    const rows = await getChallengeLeaderboard(challengeId);
-    leaderboardByChallengeId.set(challengeId, rows);
-  }
+  // Keep only chronological player state in memory. Leaderboards are loaded
+  // one cup at a time and unseen players are fetched lazily.
+  console.log('[recalculate] Using bounded leaderboard/state loading...');
+  const existingStates = new Map<string, any>();
 
-  // Preload states once for all players appearing in any preloaded leaderboard.
-  console.log('[recalculate] Preloading rating states for all involved players...');
-  const allPlayersSet = new Set<string>();
-  for (const rows of leaderboardByChallengeId.values()) {
-    for (const r of rows) allPlayersSet.add(r.player);
-  }
-  const allPlayers = Array.from(allPlayersSet);
-  const existingStates = await getStatesForAccounts(allPlayers);
-
+  // Keep pending writes bounded. Larger batches reduce SQLite overhead, but
+  // 100 cups is small enough to avoid retaining millions of history objects.
   const FLUSH_EVERY_CUPS = 1000;
   let processedCount = 0;
   let pendingHistory: any[] = [];
@@ -124,6 +106,8 @@ async function main() {
 
     const stateUpdates = pendingStateUpdates;
     const historyEntries = pendingHistory;
+    const pendingStateCount = stateUpdates.length;
+    const pendingHistoryCount = historyEntries.length;
     pendingStateUpdates = [];
     pendingHistory = [];
 
@@ -140,9 +124,9 @@ async function main() {
     }
 
     // Always log sizes for performance tuning.
-    if (pendingHistory.length > 0 || stateUpdates.length > 0) {
+    if (pendingHistoryCount > 0 || pendingStateCount > 0) {
       console.log(
-        `[recalculate] flushPending sizes | state: ${stateUpdates.length} -> ${uniqueStateUpdates.length} unique | historyRows: ${historyEntries.length}`
+        `[recalculate] flushPending sizes | state: ${pendingStateCount} -> ${uniqueStateUpdates.length} unique | historyRows: ${pendingHistoryCount}`
       );
     }
 
@@ -182,13 +166,25 @@ async function main() {
     }
   };
 
-  for (const day of cups) {
+  const totalCupsToProcess = cups.length;
+  for (let cupIdx = 0; cupIdx < cups.length; cupIdx++) {
+    const day = cups[cupIdx];
     if (stopRequested) break;
     if (!day.qualifierChallengeId) continue;
 
-    const allResults = leaderboardByChallengeId.get(day.qualifierChallengeId) ?? [];
+    const allResults = await getChallengeLeaderboard(day.qualifierChallengeId);
     if (allResults.length === 0) {
       continue; // Skip cups whose leaderboards haven't been fetched yet
+    }
+
+    const missingPlayers = allResults
+      .map(entry => entry.player)
+      .filter(player => !existingStates.has(player));
+    if (missingPlayers.length > 0) {
+      const storedStates = await getStatesForAccounts(missingPlayers);
+      for (const [accountId, state] of storedStates) {
+        existingStates.set(accountId, state);
+      }
     }
 
     const cardinal = day.cardinal && day.cardinal > 0 ? day.cardinal : allResults.length;
@@ -207,13 +203,13 @@ async function main() {
       };
     });
 
-    const updates = allResults.map(entry => {
+    const updates = allResults.map((entry, playerIndex) => {
       const state = existingStates.get(entry.player) ?? {
         accountId: entry.player,
         mode: 'qualifying' as const,
         ...DEFAULT_STATE,
       };
-      const updated = applyQualifyingCupResult(state, entry.rank, participants);
+      const updated = applyQualifyingCupResult(state, entry.player, entry.rank, participants, playerIndex);
 
       return {
         accountId: entry.player,
@@ -251,8 +247,7 @@ async function main() {
     }
 
     pendingStateUpdates.push(...updates);
-    pendingHistory.push(
-      updates.map((u, i) => ({
+    pendingHistory.push(...updates.map((u, i) => ({
         accountId: u.accountId,
         cupId: day.cupId,
         cotdDate: day.cotdDate,
@@ -260,8 +255,7 @@ async function main() {
         rating: u.rating,
         rd: u.rd,
         rank: allResults[i]?.rank ?? null,
-      }))
-    );
+      })));
 
     // Keep processed marker writes outside the heavy flush cycle for correctness.
     const tMark0 = nowMs();
@@ -273,8 +267,6 @@ async function main() {
     );
 
     if (processedCount % FLUSH_EVERY_CUPS === 0) {
-      // flatten pendingHistory (we pushed arrays)
-      pendingHistory = pendingHistory.flat();
       await flushPending();
       flushCounter++;
 
@@ -288,7 +280,6 @@ async function main() {
   }
 
   // final flush
-  pendingHistory = pendingHistory.flat();
   await flushPending();
 
   try {
