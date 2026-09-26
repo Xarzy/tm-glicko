@@ -77,16 +77,25 @@ export async function upsertPlayerRatingState(
 
 export async function getRatingRank(
   mode: RatingMode,
-  rating: number
+  rating: number,
+  rd: number,
 ): Promise<{ rank: number; total: number }> {
   try {
+    const conservativeRating = rating - rd * 0.5;
     const [aheadResult, totalResult] = await Promise.all([
       db.select({ count: sql<number>`count(*)` })
         .from(playerRatingStateTable)
-        .where(and(eq(playerRatingStateTable.mode, mode), gt(playerRatingStateTable.rating, rating))),
+        .where(and(
+          eq(playerRatingStateTable.mode, mode),
+          isNotNull(playerRatingStateTable.lastProcessedCupId),
+          sql`${playerRatingStateTable.rating} - ${playerRatingStateTable.rd} * 0.5 > ${conservativeRating}`,
+        )),
       db.select({ count: sql<number>`count(*)` })
         .from(playerRatingStateTable)
-        .where(eq(playerRatingStateTable.mode, mode)),
+        .where(and(
+          eq(playerRatingStateTable.mode, mode),
+          isNotNull(playerRatingStateTable.lastProcessedCupId),
+        )),
     ]);
 
     return {
@@ -114,7 +123,7 @@ export async function getPlayerRatingStateByRank(
 
     const row = await db.query.playerRatingStateTable.findFirst({
       where: and(eq(playerRatingStateTable.mode, mode), isNotNull(playerRatingStateTable.lastProcessedCupId)),
-      orderBy: [sql`${playerRatingStateTable.rating} DESC`],
+      orderBy: [sql`${playerRatingStateTable.rating} - ${playerRatingStateTable.rd} * 0.5 DESC`],
       offset: rank - 1,
     });
 

@@ -2,6 +2,7 @@ import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, Attachm
 import { findAccountIdByUsername } from '../services/accountLookup';
 import { getPlayerRatingState, getRatingRank, getCotdDayById } from '../db';
 import { getPlayerTier } from '../services/rankService';
+import { getUncertaintyCategory } from '../services/ratingPresentation';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 
@@ -9,17 +10,6 @@ export const data = new SlashCommandBuilder()
   .setName('playerrating')
   .setDescription("Gets user's Glicko-2 rating from COTD Qualifying.")
   .addStringOption(o => o.setName('username').setDescription('Exact Trackmania username.').setRequired(true));
-
-function getUncertaintyCategory(rd: number): string {
-  if (rd < 100) return 'very low';
-  if (rd < 130) return 'low';
-  if (rd < 150) return 'low-moderate';
-  if (rd < 175) return 'moderate';
-  if (rd < 200) return 'moderate-high';
-  if (rd < 225) return 'high';
-  if (rd < 250) return 'very high';
-  return 'extremely high';
-}
 
 function formatDate(date: Date): string {
   return date.toISOString().split('T')[0];
@@ -42,7 +32,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const { rank, total } = await getRatingRank('qualifying', state.rating);
+  const { rank, total } = await getRatingRank('qualifying', state.rating, state.rd);
   const tierInfo = await getPlayerTier(state.rating, rank, total);
 
   const ratingChange =
