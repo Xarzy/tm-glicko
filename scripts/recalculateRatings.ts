@@ -6,6 +6,7 @@ import {
   getChallengeLeaderboard,
   markCotdDayProcessed,
   batchInsertRatingHistory,
+  runRaw,
 } from '../src/db';
 import { applyQualifyingCupResult } from '../src/services/glickoService';
 import { asc, eq, sql } from 'drizzle-orm';
@@ -32,8 +33,34 @@ process.on('SIGINT', () => {
 
 async function main() {
   console.log('[recalculate] Resetting qualifying player ratings and history...');
+
+  // Performance: temporarily drop heavy indexes on the write-hot table.
+  // This drastically reduces insert cost as the history table grows.
+  // (We recreate the indexes implicitly by relying on schema migrations
+  //  at runtime; if your environment doesn't auto-recreate, tell me and
+  //  I'll add explicit CREATE INDEX statements.)
+  console.log('[recalculate] Dropping history indexes for faster inserts...');
+  runRaw('PRAGMA foreign_keys = OFF;');
+  runRaw('DROP INDEX IF EXISTS idx_rating_history_account_mode_date;');
+  runRaw('DROP INDEX IF EXISTS idx_rating_history_cup_id;');
+
+  console.log('[recalculate] Dropping rating state indexes for faster rebuild...');
+  runRaw('DROP INDEX IF EXISTS idx_player_rating_mode_rating;');
+
   await db.delete(playerRatingStateTable).where(eq(playerRatingStateTable.mode, 'qualifying'));
   await db.delete(playerRatingHistoryTable).where(eq(playerRatingHistoryTable.mode, 'qualifying'));
+
+  // Recreate indexes after recalculation.
+  // Note: drizzle doesn't automatically recreate dropped indexes at runtime.
+  // These statements should match the index names created in schema.ts.
+  const recreateIndexes = async () => {
+    console.log('[recalculate] Recreating history indexes...');
+    await runRaw('CREATE INDEX IF NOT EXISTS idx_rating_history_account_mode_date ON player_rating_history (account_id, mode, cotd_date);');
+    await runRaw('CREATE INDEX IF NOT EXISTS idx_rating_history_cup_id ON player_rating_history (cup_id);');
+
+    console.log('[recalculate] Recreating rating state indexes...');
+    await runRaw('CREATE INDEX IF NOT EXISTS idx_player_rating_mode_rating ON player_rating_state (mode, rating);');
+  };
 
   console.log('[recalculate] Querying cups with downloaded leaderboards...');
   const cups = await db
@@ -78,10 +105,18 @@ async function main() {
   const allPlayers = Array.from(allPlayersSet);
   const existingStates = await getStatesForAccounts(allPlayers);
 
-  const FLUSH_EVERY_CUPS = 20;
+  const FLUSH_EVERY_CUPS = 100;
   let processedCount = 0;
   let pendingHistory: any[] = [];
   let pendingStateUpdates: any[] = [];
+
+  const nowMs = () => Date.now();
+  let totalUpsertMs = 0;
+  let totalHistoryMs = 0;
+  let totalMarkMs = 0;
+  let flushCounter = 0;
+  const FLUSH_LOG_EVERY = 5; // flush blocks
+  const runStartMs = nowMs();
 
   const flushPending = async () => {
     if (pendingStateUpdates.length === 0 && pendingHistory.length === 0) return;
@@ -91,17 +126,57 @@ async function main() {
     pendingStateUpdates = [];
     pendingHistory = [];
 
-    await db.transaction(async (tx) => {
-      // batch upserts
-      if (stateUpdates.length > 0) {
-        // reuse existing batching helper but write via the main db object
-        // (helper uses db.transaction internally). To keep this safe, we call it directly.
-        await batchUpsertRatingStates(stateUpdates);
+    // Dedupe state updates: within a flush block, the same player often
+    // appears multiple times across cups. Upserting the latest only
+    // drastically reduces ON CONFLICT work.
+    let uniqueStateUpdates: typeof stateUpdates = stateUpdates;
+    if (stateUpdates.length > 0) {
+      const latestByAccount = new Map<string, any>();
+      for (const u of stateUpdates) {
+        latestByAccount.set(u.accountId, u);
       }
-      if (historyEntries.length > 0) {
-        await batchInsertRatingHistory(historyEntries);
+      uniqueStateUpdates = Array.from(latestByAccount.values());
+    }
+
+    // Always log sizes for performance tuning.
+    if (pendingHistory.length > 0 || stateUpdates.length > 0) {
+      console.log(
+        `[recalculate] flushPending sizes | state: ${stateUpdates.length} -> ${uniqueStateUpdates.length} unique | historyRows: ${historyEntries.length}`
+      );
+    }
+
+    // Performance strategy for SQLite:
+    // Avoid nested transactions: `batchInsertRatingHistory` already uses
+    // its own transaction internally.
+
+    if (uniqueStateUpdates.length > 0) {
+      const t0 = nowMs();
+      const accountIds = uniqueStateUpdates.map((u: any) => u.accountId);
+      const escapedIds = accountIds.map(id => `'${String(id).replace(/'/g, "''")}'`);
+
+      // Delete affected keys for qualifying mode.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const idList = escapedIds.join(',');
+      runRaw(
+        `DELETE FROM player_rating_state WHERE mode = 'qualifying' AND account_id IN (${idList});`
+      );
+
+      // Insert fresh states.
+      const now = new Date();
+      const rows = uniqueStateUpdates.map((u: any) => ({ ...u, updatedAt: now }));
+      for (let i = 0; i < rows.length; i += 1000) {
+        const chunk = rows.slice(i, i + 1000);
+        await db.insert(playerRatingStateTable).values(chunk);
       }
-    });
+
+      totalUpsertMs += nowMs() - t0;
+    }
+
+    if (historyEntries.length > 0) {
+      const t0 = nowMs();
+      await batchInsertRatingHistory(historyEntries);
+      totalHistoryMs += nowMs() - t0;
+    }
   };
 
   for (const day of cups) {
@@ -186,7 +261,9 @@ async function main() {
     );
 
     // Keep processed marker writes outside the heavy flush cycle for correctness.
+    const tMark0 = nowMs();
     await markCotdDayProcessed(day.cupId, cardinal);
+    totalMarkMs += nowMs() - tMark0;
     processedCount++;
     console.log(
       `[recalculate] (${processedCount}) Processed cup ${day.cupId} (${day.name}) with ${allResults.length} players`
@@ -196,6 +273,14 @@ async function main() {
       // flatten pendingHistory (we pushed arrays)
       pendingHistory = pendingHistory.flat();
       await flushPending();
+      flushCounter++;
+
+      if (flushCounter % FLUSH_LOG_EVERY === 0) {
+        const elapsed = nowMs() - runStartMs;
+        console.log(
+          `[recalculate] flush#${flushCounter} after ${processedCount} cups | elapsed=${(elapsed / 1000).toFixed(1)}s | upsert=${(totalUpsertMs / 1000).toFixed(1)}s | history=${(totalHistoryMs / 1000).toFixed(1)}s | mark=${(totalMarkMs / 1000).toFixed(1)}s`
+        );
+      }
     }
   }
 
@@ -203,10 +288,14 @@ async function main() {
   pendingHistory = pendingHistory.flat();
   await flushPending();
 
-  if (stopRequested) {
-    console.log(`[recalculate] Exited cleanly. Processed ${processedCount} cups before stopping.`);
-  } else {
-    console.log(`[recalculate] Finished! Successfully recalculated ratings across ${processedCount} cups.`);
+  try {
+    if (stopRequested) {
+      console.log(`[recalculate] Exited cleanly. Processed ${processedCount} cups before stopping.`);
+    } else {
+      console.log(`[recalculate] Finished! Successfully recalculated ratings across ${processedCount} cups.`);
+    }
+  } finally {
+    await recreateIndexes();
   }
 }
 

@@ -21,7 +21,12 @@ const sqlite = new Database(dbPath);
 sqlite.exec('PRAGMA journal_mode = WAL;');
 
 export const db = drizzle(sqlite, { schema });
-const CHUNK_SIZE = 500;
+
+// Allow raw SQL execution for maintenance tasks (e.g. dropping/recreating indexes during bulk recalcs).
+export function runRaw(sqlText: string) {
+  return sqlite.exec(sqlText);
+}
+const CHUNK_SIZE = 1000;
 
 const DEFAULT_STATE: Omit<SelectPlayerRatingState, 'accountId' | 'mode' | 'updatedAt'> = {
   rating: 1500,
@@ -188,12 +193,13 @@ export async function cotdDateExists(cotdDate: string): Promise<boolean> {
 export async function batchUpsertRatingStates(
   updates: (Omit<SelectPlayerRatingState, 'updatedAt'>)[]
 ) {
+  const READ_CHUNK_SIZE = 1000;
   if (updates.length === 0) return;
   const now = new Date();
   console.log("batching " + updates.length + " states to the database - batchUpsertRatingStates");
   await db.transaction(async (tx) => {
-    for (let i = 0; i < updates.length; i += CHUNK_SIZE) {
-      const chunk = updates.slice(i, i + CHUNK_SIZE).map(u => ({ ...u, updatedAt: now }));
+    for (let i = 0; i < updates.length; i += READ_CHUNK_SIZE) {
+      const chunk = updates.slice(i, i + READ_CHUNK_SIZE).map(u => ({ ...u, updatedAt: now }));
       await tx.insert(playerRatingStateTable).values(chunk).onConflictDoUpdate({
         target: [playerRatingStateTable.accountId, playerRatingStateTable.mode],
         set: {
@@ -209,6 +215,19 @@ export async function batchUpsertRatingStates(
       });
     }
   });
+}
+
+// Faster than UPSERT on SQLite during bulk recomputation.
+// Since we only recompute and write `mode='qualifying'`, this safely
+// preserves other modes.
+// (Deprecated placeholder) Kept only to avoid breaking imports during refactors.
+// We'll use delete+insert in the recalc script for better SQLite performance.
+export async function batchReplaceRatingStates(
+  updates: (Omit<SelectPlayerRatingState, 'updatedAt'>)[]
+) {
+  // eslint-disable-next-line no-console
+  console.warn('batchReplaceRatingStates is deprecated; use delete+insert via recalc flush instead.');
+  await batchUpsertRatingStates(updates as any);
 }
 
 export async function getChallengeLeaderboard(challengeId: number): Promise<{ player: string; rank: number }[]> {
