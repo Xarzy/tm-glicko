@@ -1,6 +1,6 @@
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import { Database } from 'bun:sqlite';
-import { inArray, isNull, asc, sql, eq, and, gt } from 'drizzle-orm';
+import { inArray, isNotNull, isNull, asc, sql, eq, and, gt } from 'drizzle-orm';
 import * as schema from './schema';
 import {
   cotdDaysTable,
@@ -21,7 +21,12 @@ const sqlite = new Database(dbPath);
 sqlite.exec('PRAGMA journal_mode = WAL;');
 
 export const db = drizzle(sqlite, { schema });
-const CHUNK_SIZE = 500;
+
+// Allow raw SQL execution for maintenance tasks (e.g. dropping/recreating indexes during bulk recalcs).
+export function runRaw(sqlText: string) {
+  return sqlite.exec(sqlText);
+}
+const CHUNK_SIZE = 1000;
 
 const DEFAULT_STATE: Omit<SelectPlayerRatingState, 'accountId' | 'mode' | 'updatedAt'> = {
   rating: 1500,
@@ -72,16 +77,25 @@ export async function upsertPlayerRatingState(
 
 export async function getRatingRank(
   mode: RatingMode,
-  rating: number
+  rating: number,
+  rd: number,
 ): Promise<{ rank: number; total: number }> {
   try {
+    const conservativeRating = rating - rd * 0.5;
     const [aheadResult, totalResult] = await Promise.all([
       db.select({ count: sql<number>`count(*)` })
         .from(playerRatingStateTable)
-        .where(and(eq(playerRatingStateTable.mode, mode), gt(playerRatingStateTable.rating, rating))),
+        .where(and(
+          eq(playerRatingStateTable.mode, mode),
+          isNotNull(playerRatingStateTable.lastProcessedCupId),
+          sql`${playerRatingStateTable.rating} - ${playerRatingStateTable.rd} * 0.5 > ${conservativeRating}`,
+        )),
       db.select({ count: sql<number>`count(*)` })
         .from(playerRatingStateTable)
-        .where(eq(playerRatingStateTable.mode, mode)),
+        .where(and(
+          eq(playerRatingStateTable.mode, mode),
+          isNotNull(playerRatingStateTable.lastProcessedCupId),
+        )),
     ]);
 
     return {
@@ -91,6 +105,33 @@ export async function getRatingRank(
   } catch (error) {
     console.error(error);
     return { rank: 0, total: 0 };
+  }
+}
+
+export async function getPlayerRatingStateByRank(
+  mode: RatingMode,
+  rank: number
+): Promise<{ state: SelectPlayerRatingState; total: number } | null> {
+  try {
+    const totalResult = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(playerRatingStateTable)
+      .where(and(eq(playerRatingStateTable.mode, mode), isNotNull(playerRatingStateTable.lastProcessedCupId)));
+
+    const total = totalResult[0]?.count ?? 0;
+    if (rank < 1 || rank > total) return null;
+
+    const row = await db.query.playerRatingStateTable.findFirst({
+      where: and(eq(playerRatingStateTable.mode, mode), isNotNull(playerRatingStateTable.lastProcessedCupId)),
+      orderBy: [sql`${playerRatingStateTable.rating} - ${playerRatingStateTable.rd} * 0.5 DESC`],
+      offset: rank - 1,
+    });
+
+    if (!row) return null;
+    return { state: row, total };
+  } catch (error) {
+    console.error('[getPlayerRatingStateByRank] error:', error);
+    return null;
   }
 }
 
@@ -135,15 +176,21 @@ export async function markCotdDayProcessed(cupId: number, cardinal: number) {
 
 export async function getStatesForAccounts(accountIds: string[]): Promise<Map<string, SelectPlayerRatingState>> {
   if (accountIds.length === 0) return new Map();
+  const deduped = Array.from(new Set(accountIds));
   const map = new Map<string, SelectPlayerRatingState>();
-  for (let i = 0; i < accountIds.length; i += CHUNK_SIZE) {
-    const chunk = accountIds.slice(i, i + CHUNK_SIZE);
-    const rows = await db.select().from(playerRatingStateTable)
-      .where(and(inArray(playerRatingStateTable.accountId, chunk), eq(playerRatingStateTable.mode, 'qualifying')));
-    for (const r of rows) {
-      map.set(r.accountId, r);
-    }
+
+  for (let i = 0; i < deduped.length; i += CHUNK_SIZE) {
+    const chunk = deduped.slice(i, i + CHUNK_SIZE);
+    const rows = await db
+      .select()
+      .from(playerRatingStateTable)
+      .where(
+        and(inArray(playerRatingStateTable.accountId, chunk), eq(playerRatingStateTable.mode, 'qualifying'))
+      );
+
+    for (const r of rows) map.set(r.accountId, r);
   }
+
   return map;
 }
 
@@ -155,12 +202,13 @@ export async function cotdDateExists(cotdDate: string): Promise<boolean> {
 export async function batchUpsertRatingStates(
   updates: (Omit<SelectPlayerRatingState, 'updatedAt'>)[]
 ) {
+  const READ_CHUNK_SIZE = 1000;
   if (updates.length === 0) return;
   const now = new Date();
   console.log("batching " + updates.length + " states to the database - batchUpsertRatingStates");
   await db.transaction(async (tx) => {
-    for (let i = 0; i < updates.length; i += CHUNK_SIZE) {
-      const chunk = updates.slice(i, i + CHUNK_SIZE).map(u => ({ ...u, updatedAt: now }));
+    for (let i = 0; i < updates.length; i += READ_CHUNK_SIZE) {
+      const chunk = updates.slice(i, i + READ_CHUNK_SIZE).map(u => ({ ...u, updatedAt: now }));
       await tx.insert(playerRatingStateTable).values(chunk).onConflictDoUpdate({
         target: [playerRatingStateTable.accountId, playerRatingStateTable.mode],
         set: {
@@ -176,6 +224,19 @@ export async function batchUpsertRatingStates(
       });
     }
   });
+}
+
+// Faster than UPSERT on SQLite during bulk recomputation.
+// Since we only recompute and write `mode='qualifying'`, this safely
+// preserves other modes.
+// (Deprecated placeholder) Kept only to avoid breaking imports during refactors.
+// We'll use delete+insert in the recalc script for better SQLite performance.
+export async function batchReplaceRatingStates(
+  updates: (Omit<SelectPlayerRatingState, 'updatedAt'>)[]
+) {
+  // eslint-disable-next-line no-console
+  console.warn('batchReplaceRatingStates is deprecated; use delete+insert via recalc flush instead.');
+  await batchUpsertRatingStates(updates as any);
 }
 
 export async function getChallengeLeaderboard(challengeId: number): Promise<{ player: string; rank: number }[]> {
@@ -239,4 +300,4 @@ export async function getRatingHistoryForAccounts(
       )
     )
     .orderBy(asc(playerRatingHistoryTable.cotdDate));
-}
+}

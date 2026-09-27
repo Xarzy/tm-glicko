@@ -1,15 +1,21 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, AttachmentBuilder } from 'discord.js';
-import { findAccountIdByUsername } from '../services/accountLookup';
-import { getPlayerRatingState, getRatingRank, getCotdDayById } from '../db';
+import { findUsernameByAccountId } from '../services/accountLookup';
+import { getPlayerRatingStateByRank, getCotdDayById } from '../db';
 import { getPlayerTier } from '../services/rankService';
 import { getUncertaintyCategory } from '../services/ratingPresentation';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 
 export const data = new SlashCommandBuilder()
-  .setName('playerrating')
-  .setDescription("Gets user's Glicko-2 rating from COTD Qualifying.")
-  .addStringOption(o => o.setName('username').setDescription('Exact Trackmania username.').setRequired(true));
+  .setName('playerrank')
+  .setDescription("Gets player's Glicko-2 rating info by their leaderboard rank.")
+  .addIntegerOption(o =>
+    o
+      .setName('rank')
+      .setDescription('The rank position on the leaderboard (e.g. 1, 2, 10).')
+      .setRequired(true)
+      .setMinValue(1)
+  );
 
 function formatDate(date: Date): string {
   return date.toISOString().split('T')[0];
@@ -18,27 +24,22 @@ function formatDate(date: Date): string {
 export async function execute(interaction: ChatInputCommandInteraction) {
   await interaction.deferReply();
 
-  const username = interaction.options.getString('username', true);
+  const rank = interaction.options.getInteger('rank', true);
 
-  const accountId = await findAccountIdByUsername(username);
-  if (!accountId) {
-    await interaction.editReply(`No exact match for **${username}** — check spelling/casing.`);
+  const result = await getPlayerRatingStateByRank('qualifying', rank);
+  if (!result) {
+    await interaction.editReply(`No player found at rank **#${rank}**.`);
     return;
   }
 
-  const state = await getPlayerRatingState(accountId, 'qualifying');
-  if (state.lastProcessedCupId === null) {
-    await interaction.editReply(`**${username}** hasn't appeared in any processed COTD data yet.`);
-    return;
-  }
+  const { state, total } = result;
 
-  const { rank, total } = await getRatingRank('qualifying', state.rating, state.rd);
+  // Resolve player username from account ID
+  const username = (await findUsernameByAccountId(state.accountId)) ?? state.accountId;
   const tierInfo = await getPlayerTier(state.rating, rank, total);
 
   const ratingChange =
-    state.previousRating !== null
-      ? state.rating - state.previousRating
-      : null;
+    state.previousRating !== null ? state.rating - state.previousRating : null;
 
   let changeDateStr = '';
   if (state.lastProcessedCupId !== null) {
@@ -57,7 +58,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   const embed = new EmbedBuilder()
     .setColor(tierInfo.rank.tierColor)
-    .setTitle(`${username} Rating Info`)
+    .setTitle(`Rank ${rank} (${username}) Rating Info`)
     .addFields(
       {
         name: 'Competitive Rank',

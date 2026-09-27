@@ -32,6 +32,38 @@ export async function findAccountIdsByUsernames(usernames: string[]): Promise<Ma
       console.error('[accountLookup] batch failed:', err);
     }
   }
+  return map;
+}
+export async function findUsernamesByAccountIds(accountIds: string[]): Promise<Map<string, string>> {
+  if (accountIds.length === 0) return new Map();
+  const token = await getOAuthToken();
+  const map = new Map<string, string>();
+
+  const CHUNK = 50;
+  for (let i = 0; i < accountIds.length; i += CHUNK) {
+    const chunk = accountIds.slice(i, i + CHUNK);
+    const query = chunk.map(id => `accountId[]=${encodeURIComponent(id)}`).join('&');
+    const url = `https://api.trackmania.com/api/display-names?${query}`;
+
+    try {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'tm-glicko (contact: admin)' },
+      });
+      if (res.ok) {
+        const data = (await res.json()) as Record<string, string>;
+        for (const [id, name] of Object.entries(data)) {
+          map.set(id, name);
+        }
+      }
+    } catch (err) {
+      console.error('[accountLookup] findUsernamesByAccountIds failed:', err);
+    }
+  }
 
   return map;
+}
+
+export async function findUsernameByAccountId(accountId: string): Promise<string | null> {
+  const map = await findUsernamesByAccountIds([accountId]);
+  return map.get(accountId) ?? null;
 }

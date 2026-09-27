@@ -2,6 +2,8 @@ export interface GlickoOpponent {
   rating: number;
   rd: number;
   score: number; // continuous [0,1] here (percentile), but 0/0.5/1 works too
+  weight?: number;
+  ratingWeight?: number;
 }
 
 const SCALE = 173.7178;
@@ -39,8 +41,10 @@ export function updateGlicko2(
     const phiJ = opp.rd / SCALE;
     const gPhiJ = g(phiJ);
     const e = expectedScore(mu, muJ, phiJ);
-    vInv += gPhiJ * gPhiJ * e * (1 - e);
-    deltaSum += gPhiJ * (opp.score - e);
+    const weight = opp.weight ?? 1;
+    vInv += weight * gPhiJ * gPhiJ * e * (1 - e);
+    const ratingWeight = opp.ratingWeight ?? weight;
+    deltaSum += ratingWeight * gPhiJ * (opp.score - e);
   }
   const v = 1 / vInv;
   const delta = v * deltaSum;
