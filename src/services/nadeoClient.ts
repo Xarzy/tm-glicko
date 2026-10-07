@@ -84,3 +84,4 @@ export async function nadeoGet<T>(url: string): Promise<T | null> {
     }
   });
 }
+

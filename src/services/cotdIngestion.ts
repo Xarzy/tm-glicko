@@ -1,5 +1,12 @@
 import { nadeoGet } from './nadeoClient';
-import { applyQualifyingCupResult } from './glickoService.ts';
+import {
+  applyQualifyingCupResult,
+  getRatingSeedRanks,
+  isLikelyAbandonedQualifyingRun,
+  prepareQualifyingState,
+  QUALIFYING_RATING_CONFIG,
+} from './glickoService.ts';
+import { invalidateRankThresholdCache } from './rankService';
 import {
   insertCotdDaysIfNew,
   getPendingCotdDays,
@@ -15,15 +22,26 @@ import {
 } from '../db';
 import type { SelectCotdDay } from '../db/schema';
 
-const DEFAULT_STATE = { rating: 1500, rd: 350, vol: 0.06, matchCount: 0, peakRating: 1500, previousRating: null, lastProcessedCupId: null };
+const DEFAULT_STATE = {
+  rating: QUALIFYING_RATING_CONFIG.initialRating,
+  rd: QUALIFYING_RATING_CONFIG.initialRd,
+  vol: QUALIFYING_RATING_CONFIG.initialVolatility,
+  matchCount: 0,
+  peakRating: QUALIFYING_RATING_CONFIG.initialRating,
+  previousRating: null,
+  lastProcessedCupId: null,
+  lastRatedAt: null,
+};
 
 interface CupsOfTheDayResponse {
   COTDs: { id: number; competition: { id: number; name: string; startDate: number } }[];
 }
-interface CompetitionRound { qualifierChallengeId?: number }
+interface CompetitionRound {
+  qualifierChallengeId?: number;
+}
 interface ChallengeLeaderboardResponse {
   cardinal: number;
-  results: { player: string; rank: number }[];
+  results: { player: string; rank: number; score?: number; points?: number }[];
 }
 
 interface RawCotdEntry {
@@ -97,11 +115,19 @@ async function processCotdDay(day: SelectCotdDay) {
   let challengeId = day.qualifierChallengeId;
   console.log("challengeId", challengeId);
 
+  let rounds: CompetitionRound[] | null = null;
+  const getRounds = async () => {
+    if (rounds === null) {
+      rounds = await nadeoGet<CompetitionRound[]>(
+        `https://meet.trackmania.nadeo.club/api/competitions/${day.competitionId}/rounds`
+      );
+    }
+    return rounds;
+  };
+
   if (!challengeId) {
     console.log("getting rounds for cup", day.cupId);
-    const rounds = await nadeoGet<CompetitionRound[]>(
-      `https://meet.trackmania.nadeo.club/api/competitions/${day.competitionId}/rounds`
-    );
+    rounds = await getRounds();
     const qualRound = rounds?.find(r => r.qualifierChallengeId);
     if (!qualRound?.qualifierChallengeId) {
       console.warn(`[ingest] no qualifier round for cup ${day.cupId} (${day.name}), skipping`);
@@ -112,11 +138,11 @@ async function processCotdDay(day: SelectCotdDay) {
     await setQualifierChallengeId(day.cupId, challengeId);
   }
 
-  let allResults: { player: string; rank: number }[] = [];
+  let allResults: { player: string; rank: number; score: number | null }[] = [];
   let cardinal: number;
 
   const cachedResults = await getChallengeLeaderboard(challengeId);
-  if (cachedResults.length > 0) {
+  if (cachedResults.length > 0 && cachedResults.every(result => result.score !== null)) {
     console.log(`[ingest] challenge ${challengeId} loaded from DB (${cachedResults.length} records)`);
     allResults = cachedResults;
     cardinal = day.cardinal && day.cardinal > 0 ? day.cardinal : cachedResults.length;
@@ -131,9 +157,18 @@ async function processCotdDay(day: SelectCotdDay) {
       );
       if (!page) break;
       cardinal = page.cardinal;
-      allResults.push(...page.results);
+      allResults.push(...page.results.map(result => ({
+        player: result.player,
+        rank: result.rank,
+        score: result.score ?? result.points ?? null,
+      })));
       if (page.results.length < 100) break;
       offset += 100;
+    }
+
+    if (allResults.length === 0 && cachedResults.length > 0) {
+      allResults = cachedResults;
+      cardinal = day.cardinal && day.cardinal > 0 ? day.cardinal : cachedResults.length;
     }
 
     if (allResults.length === 0) {
@@ -148,21 +183,49 @@ async function processCotdDay(day: SelectCotdDay) {
 
   console.log("getting existing states for", allResults.length, "players");
   const existingStates = await getStatesForAccounts(allResults.map(r => r.player));
+  const ratedAt = new Date(day.startDate);
 
   console.log("updating states");
-  const participants = allResults.map(entry => {
+  const preparedStates = allResults.map(entry => {
     const s = existingStates.get(entry.player) ?? { accountId: entry.player, mode: 'qualifying' as const, ...DEFAULT_STATE };
+    return prepareQualifyingState(s, s.lastRatedAt, ratedAt);
+  });
+  const ratingSeedRanks = getRatingSeedRanks(preparedStates.map(state => state.rating));
+  const resultSignals = allResults.map((entry, index) => {
+    const state = existingStates.get(entry.player) ?? { ...DEFAULT_STATE };
+    return {
+      entry,
+      index,
+      rating: preparedStates[index].rating,
+      matchCount: state.matchCount,
+      rank: entry.rank,
+      ratingSeedRank: ratingSeedRanks[index],
+      fieldSize: allResults.length,
+    };
+  });
+  const primaryFlags = new Set(
+    resultSignals
+      .filter(signal => isLikelyAbandonedQualifyingRun(signal))
+      .map(signal => signal.entry.player),
+  );
+  const ratedResults = resultSignals
+    .filter(signal => !primaryFlags.has(signal.entry.player))
+    .map(({ entry, index }) => ({ entry, index }));
+
+  const participants = ratedResults.map(({ entry, index }) => {
+    const prepared = preparedStates[index];
     return {
       player: entry.player,
       rank: entry.rank,
-      rating: s.rating,
-      rd: s.rd,
+      rating: prepared.rating,
+      rd: prepared.rd,
     };
   });
 
-  const updates = allResults.map((entry, playerIndex) => {
+  const updates = ratedResults.map(({ entry }, playerIndex) => {
     const state = existingStates.get(entry.player) ?? { accountId: entry.player, mode: 'qualifying' as const, ...DEFAULT_STATE };
-    const updated = applyQualifyingCupResult(state, entry.player, entry.rank, participants, playerIndex);
+    const prepared = prepareQualifyingState(state, state.lastRatedAt, ratedAt);
+    const updated = applyQualifyingCupResult(prepared, entry.player, entry.rank, participants, playerIndex);
 
     return {
       accountId: entry.player,
@@ -174,22 +237,30 @@ async function processCotdDay(day: SelectCotdDay) {
       peakRating: Math.max(state.peakRating, updated.rating),
       previousRating: state.rating,
       lastProcessedCupId: day.cupId,
+      lastRatedAt: ratedAt,
       lastFetchedAt: new Date(),
     };
   });
+  const updatesByAccount = new Map(updates.map(update => [update.accountId, update]));
   console.log("upserting states")
   await batchUpsertRatingStates(updates);
   await batchInsertRatingHistory(
-    updates.map((u, i) => ({
-      accountId: u.accountId,
+    allResults.map(entry => {
+      const update = updatesByAccount.get(entry.player);
+      const currentState = existingStates.get(entry.player) ?? DEFAULT_STATE;
+      return {
+      accountId: entry.player,
       cupId: day.cupId,
       cotdDate: day.cotdDate,
       mode: 'qualifying' as const,
-      rating: u.rating,
-      rd: u.rd,
-      rank: allResults[i]?.rank ?? null,
-    }))
+      rating: update?.rating ?? currentState.rating,
+      rd: update?.rd ?? currentState.rd,
+      rank: entry.rank,
+      isFlagged: !updatesByAccount.has(entry.player),
+      };
+    })
   );
+  invalidateRankThresholdCache();
   console.log("marking processed")
   await markCotdDayProcessed(day.cupId, cardinal);
 
@@ -215,7 +286,6 @@ export async function discoverNewCotdDays(): Promise<number> {
       newRows.push({
         cupId: c.id, cotdDate: dateKey, competitionId: c.competition.id, name: c.competition.name,
         startDate: new Date(c.competition.startDate * 1000),
-        excluded: troll.excluded, excludedReason: troll.reason ?? null,
       });
     }
 
@@ -255,7 +325,7 @@ export async function fetchMissingLeaderboards(shouldStop?: () => boolean) {
     }
 
     const cached = await getChallengeLeaderboard(challengeId);
-    if (cached.length > 0) continue;
+    if (cached.length > 0 && cached.every(result => result.score !== null)) continue;
 
     let offset = 0;
     let cardinal = Infinity;
@@ -268,7 +338,11 @@ export async function fetchMissingLeaderboards(shouldStop?: () => boolean) {
       );
       if (!page) break;
       cardinal = page.cardinal;
-      allResults.push(...page.results);
+      allResults.push(...page.results.map(result => ({
+        player: result.player,
+        rank: result.rank,
+        score: result.score ?? result.points ?? null,
+      })));
       if (page.results.length < 100) break;
       offset += 100;
     }
@@ -283,17 +357,28 @@ export async function fetchMissingLeaderboards(shouldStop?: () => boolean) {
 function isPreferredCotd(cotd: RawCotdEntry): boolean {
   const edition = cotd.edition ?? 1;
   if (edition !== 1) return false;
+  
+  const brokenCotds = [
+    '2020-12-10', '2021-04-06', '2021-04-06', '2021-09-08', 
+    '2021-11-05', '2021-11-13', '2021-11-14', '2022-01-17', '2023-03-27', '2023-07-02', 
+    '2023-12-04', '2024-04-03', '2024-10-15', '2024-12-04', '2025-10-20'
+  ]
+
+  const firstOfTheMonthNonTrolls = [
+    '2026-09-01', '2026-07-01', '2026-05-01', '2026-03-01',
+    '2025-07-01', '2022-12-01', '2021-12-01', '2021-05-01'
+  ]
 
   if (cotd.competition.partition !== 'crossplay') return false;
 
-  const date = new Date(cotd.competition.startDate);
+  const date = new Date(cotd.competition.startDate * 1000);
   const dateOnly = date.toISOString().slice(0, 10);
 
-  if (dateOnly >= '2021-04-01' && date.getUTCDate() === 1) {
+  if (dateOnly >= '2021-04-01' && (date.getUTCDate() === 1 && !firstOfTheMonthNonTrolls.includes(dateOnly))) {
     return false;
   }
 
-  if (dateOnly >= '2026-02-01' && date.getUTCDay() === 0) {
+  if (brokenCotds.includes(dateOnly)) {
     return false;
   }
 
@@ -310,6 +395,5 @@ function cotdCalendarDate(startDateUnixSeconds: number): string {
 function isTrollMapDate(startDateUnixSeconds: number): { excluded: boolean; reason?: string } {
   const date = new Date(startDateUnixSeconds * 1000); // UTC, matching cotdCalendarDate's convention
   if (date.getUTCDate() === 1) return { excluded: true, reason: 'first-of-month' };
-  if (date.getUTCDay() === 0) return { excluded: true, reason: 'sunday' };
   return { excluded: false };
 }

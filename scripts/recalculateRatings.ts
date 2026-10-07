@@ -8,17 +8,25 @@ import {
   batchInsertRatingHistory,
   runRaw,
 } from '../src/db';
-import { applyQualifyingCupResult } from '../src/services/glickoService';
+import {
+  applyQualifyingCupResult,
+  getRatingSeedRanks,
+  isLikelyAbandonedQualifyingRun,
+  prepareQualifyingState,
+  QUALIFYING_RATING_CONFIG,
+} from '../src/services/glickoService';
+import { invalidateRankThresholdCache } from '../src/services/rankService';
 import { asc, eq, sql } from 'drizzle-orm';
 
 const DEFAULT_STATE = {
-  rating: 1500,
-  rd: 350,
-  vol: 0.06,
+  rating: QUALIFYING_RATING_CONFIG.initialRating,
+  rd: QUALIFYING_RATING_CONFIG.initialRd,
+  vol: QUALIFYING_RATING_CONFIG.initialVolatility,
   matchCount: 0,
-  peakRating: 1500,
+  peakRating: QUALIFYING_RATING_CONFIG.initialRating,
   previousRating: null,
   lastProcessedCupId: null,
+  lastRatedAt: null,
 };
 
 let stopRequested = false;
@@ -188,28 +196,46 @@ async function main() {
     }
 
     const cardinal = day.cardinal && day.cardinal > 0 ? day.cardinal : allResults.length;
+    const ratedAt = new Date(day.startDate);
 
-    const participants = allResults.map(entry => {
+    const preparedStates = allResults.map(entry => {
       const s = existingStates.get(entry.player) ?? {
         accountId: entry.player,
         mode: 'qualifying' as const,
         ...DEFAULT_STATE,
       };
+      return prepareQualifyingState(s, s.lastRatedAt, ratedAt);
+    });
+    const ratingSeedRanks = getRatingSeedRanks(preparedStates.map(state => state.rating));
+    const ratedResults = allResults.map((entry, index) => ({ entry, index })).filter(({ entry, index }) => {
+      const state = existingStates.get(entry.player) ?? { ...DEFAULT_STATE };
+      return !isLikelyAbandonedQualifyingRun({
+        rating: preparedStates[index].rating,
+        matchCount: state.matchCount,
+        rank: entry.rank,
+        ratingSeedRank: ratingSeedRanks[index],
+        fieldSize: allResults.length,
+      });
+    });
+
+    const participants = ratedResults.map(({ entry, index }) => {
+      const prepared = preparedStates[index];
       return {
         player: entry.player,
         rank: entry.rank,
-        rating: s.rating,
-        rd: s.rd,
+        rating: prepared.rating,
+        rd: prepared.rd,
       };
     });
 
-    const updates = allResults.map((entry, playerIndex) => {
+    const updates = ratedResults.map(({ entry }, playerIndex) => {
       const state = existingStates.get(entry.player) ?? {
         accountId: entry.player,
         mode: 'qualifying' as const,
         ...DEFAULT_STATE,
       };
-      const updated = applyQualifyingCupResult(state, entry.player, entry.rank, participants, playerIndex);
+      const prepared = prepareQualifyingState(state, state.lastRatedAt, ratedAt);
+      const updated = applyQualifyingCupResult(prepared, entry.player, entry.rank, participants, playerIndex);
 
       return {
         accountId: entry.player,
@@ -221,6 +247,7 @@ async function main() {
         peakRating: Math.max(state.peakRating, updated.rating),
         previousRating: state.rating,
         lastProcessedCupId: day.cupId,
+        lastRatedAt: ratedAt,
         lastFetchedAt: new Date(),
       };
     });
@@ -241,21 +268,28 @@ async function main() {
         peakRating: u.peakRating,
         previousRating: u.previousRating,
         lastProcessedCupId: u.lastProcessedCupId,
+        lastRatedAt: u.lastRatedAt,
         lastFetchedAt: u.lastFetchedAt,
         updatedAt: new Date(),
       });
     }
 
     pendingStateUpdates.push(...updates);
-    pendingHistory.push(...updates.map((u, i) => ({
-        accountId: u.accountId,
+    const updatesByAccount = new Map(updates.map(update => [update.accountId, update]));
+    pendingHistory.push(...allResults.map(entry => {
+      const update = updatesByAccount.get(entry.player);
+      const currentState = existingStates.get(entry.player) ?? DEFAULT_STATE;
+      return {
+        accountId: entry.player,
         cupId: day.cupId,
         cotdDate: day.cotdDate,
         mode: 'qualifying' as const,
-        rating: u.rating,
-        rd: u.rd,
-        rank: allResults[i]?.rank ?? null,
-      })));
+        rating: update?.rating ?? currentState.rating,
+        rd: update?.rd ?? currentState.rd,
+        rank: entry.rank,
+        isFlagged: !updatesByAccount.has(entry.player),
+      };
+    }));
 
     // Keep processed marker writes outside the heavy flush cycle for correctness.
     const tMark0 = nowMs();
@@ -281,6 +315,7 @@ async function main() {
 
   // final flush
   await flushPending();
+  invalidateRankThresholdCache();
 
   try {
     if (stopRequested) {

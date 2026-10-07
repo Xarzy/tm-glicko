@@ -150,7 +150,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   let colorIdx = 0;
 
   for (const p of foundPlayers) {
-    const playerRows = historyRows.filter(r => r.accountId === p.accountId);
+    const playerRows = historyRows.filter(r => r.accountId === p.accountId && !r.isFlagged);
     if (playerRows.length === 0) continue;
 
     const points = playerRows.map(r => ({

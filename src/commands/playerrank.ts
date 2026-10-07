@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, AttachmentBuilder } from 'discord.js';
 import { findUsernameByAccountId } from '../services/accountLookup';
-import { getPlayerRatingStateByRank, getCotdDayById } from '../db';
+import { getPlayerRatingStateByRank, getCotdDayById, leaderboardScore } from '../db';
 import { getPlayerTier } from '../services/rankService';
 import { getUncertaintyCategory } from '../services/ratingPresentation';
 import { join } from 'node:path';
@@ -36,7 +36,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   // Resolve player username from account ID
   const username = (await findUsernameByAccountId(state.accountId)) ?? state.accountId;
-  const tierInfo = await getPlayerTier(state.rating, rank, total);
+  const tierInfo = await getPlayerTier(leaderboardScore(state.rating, state.rd), rank, total);
 
   const ratingChange =
     state.previousRating !== null ? state.rating - state.previousRating : null;
