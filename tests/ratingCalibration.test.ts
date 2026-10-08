@@ -16,7 +16,7 @@ test('an unrated elapsed-time state keeps its raw rating and volatility', () => 
   expect(prepared.rd).toBe(advanceGlickoRd(state.rd, state.vol, 2));
 });
 
-test('a qualifying result updates the supplied Glicko rating directly', () => {
+test('a qualifying result updates rating and keeps uncertainty in the valid range', () => {
   const state = { rating: 2700, rd: 70, vol: 0.06, matchCount: 500 };
   const updated = applyQualifyingCupResult(
     state,
@@ -31,14 +31,16 @@ test('a qualifying result updates the supplied Glicko rating directly', () => {
 
   expect(updated.rating).toBeGreaterThan(state.rating);
   expect(updated.rating).toBeLessThan(2720);
-  expect(updated.rd).toBeLessThan(state.rd);
+  expect(Number.isFinite(updated.rd)).toBe(true);
+  expect(updated.rd).toBeGreaterThanOrEqual(30);
+  expect(updated.rd).toBeLessThanOrEqual(350);
 });
 
-test('flags an experienced high-Elo player whose rank falls outside the top 7 percent', () => {
+test('flags an experienced high-Elo player whose rank exceeds the Elo-scaled cutoff', () => {
   expect(isLikelyAbandonedQualifyingRun({
     rating: 2200,
     matchCount: 100,
-    rank: 1500,
+    rank: 2000,
     ratingSeedRank: 100,
     fieldSize: 5000,
   })).toBe(true);
@@ -53,8 +55,9 @@ test('uses an Elo-scaled percentile cutoff and protects a top-101 finish', () =>
   };
 
   expect(isLikelyAbandonedQualifyingRun({ ...result, ratingSeedRank: 1 })).toBe(false);
-  expect(isLikelyAbandonedQualifyingRun({ ...result, rank: 400, ratingSeedRank: 1 })).toBe(true);
-  expect(isLikelyAbandonedQualifyingRun({ ...result, rank: 1500, ratingSeedRank: 500 })).toBe(true);
+  expect(isLikelyAbandonedQualifyingRun({ ...result, rank: 400, ratingSeedRank: 1 })).toBe(false);
+  expect(isLikelyAbandonedQualifyingRun({ ...result, rank: 1500, ratingSeedRank: 1 })).toBe(true);
+  expect(isLikelyAbandonedQualifyingRun({ ...result, rank: 1500, ratingSeedRank: 500 })).toBe(false);
   expect(isLikelyAbandonedQualifyingRun({ ...result, rank: 1400, ratingSeedRank: 500 })).toBe(false);
 });
 

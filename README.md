@@ -66,6 +66,12 @@ NADEO_SERVER_PASSWORD=your_nadeo_password
 bun run src/index.ts
 ```
 
+## Automation
+
+GitHub Actions runs the test suite and TypeScript type-check on pushes and pull
+requests. Dependabot checks weekly for Bun dependency and GitHub Actions
+updates.
+
 ## Commands
 
 The bot registers slash commands from `src/commands/`:
