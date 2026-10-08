@@ -13,6 +13,7 @@ export const playerRatingStateTable = sqliteTable('player_rating_state', {
   peakRating: real('peak_rating').notNull().default(1500),
   previousRating: real('previous_rating'),
   lastProcessedCupId: integer('last_processed_cup_id'),
+  lastRatedAt: integer('last_rated_at', { mode: 'timestamp' }),
   lastFetchedAt: integer('last_fetched_at', { mode: 'timestamp' }),
   updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
 }, (table) => ({
@@ -39,6 +40,7 @@ export const challengeLeaderboardsTable = sqliteTable('challenge_leaderboards', 
   challengeId: integer('challenge_id').notNull(),
   player: text('player').notNull(),
   rank: integer('rank').notNull(),
+  score: integer('score'),
 }, (table) => ({
   pk: primaryKey({ columns: [table.challengeId, table.player] }),
   playerIdx: index('idx_challenge_leaderboards_player').on(table.player),
@@ -54,6 +56,7 @@ export const playerRatingHistoryTable = sqliteTable('player_rating_history', {
   rating: real('rating').notNull(),
   rd: real('rd').notNull(),
   rank: integer('rank'),
+  isFlagged: integer('is_flagged', { mode: 'boolean' }).notNull().default(false),
 }, (table) => ({
   accountModeDateIdx: index('idx_rating_history_account_mode_date').on(table.accountId, table.mode, table.cotdDate),
   cupIdx: index('idx_rating_history_cup_id').on(table.cupId),

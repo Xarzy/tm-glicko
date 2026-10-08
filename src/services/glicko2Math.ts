@@ -1,12 +1,16 @@
 export interface GlickoOpponent {
   rating: number;
   rd: number;
-  score: number; // continuous [0,1] here (percentile), but 0/0.5/1 works too
+  score: number;
   weight?: number;
   ratingWeight?: number;
 }
 
-const SCALE = 173.7178;
+export const GLICKO_SCALE = 173.7178;
+export const MIN_RD = 30;
+export const MAX_RD = 350;
+export const MIN_VOLATILITY = 0.01;
+export const MAX_VOLATILITY = 0.15;
 const EPSILON = 0.000001;
 
 function g(phi: number): number {
@@ -17,6 +21,38 @@ function expectedScore(mu: number, muJ: number, phiJ: number): number {
   return 1 / (1 + Math.exp(-g(phiJ) * (mu - muJ)));
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function assertFinite(name: string, value: number): void {
+  if (!Number.isFinite(value)) {
+    throw new Error(`Glicko-2 ${name} must be finite.`);
+  }
+}
+
+/**
+ * Propagates uncertainty through elapsed Glicko rating periods without moving
+ * the rating. Call this before a returning player receives their next result.
+ */
+export function advanceGlickoRd(
+  rd: number,
+  vol: number,
+  elapsedPeriods = 1,
+): number {
+  assertFinite('RD', rd);
+  assertFinite('volatility', vol);
+  assertFinite('elapsed periods', elapsedPeriods);
+  if (vol <= 0) throw new Error('Glicko-2 volatility must be greater than zero.');
+
+  const periods = Math.max(0, elapsedPeriods);
+  if (periods === 0) return clamp(rd, MIN_RD, MAX_RD);
+  const phi = clamp(rd, MIN_RD, MAX_RD) / GLICKO_SCALE;
+  const safeVol = clamp(vol, MIN_VOLATILITY, MAX_VOLATILITY);
+  const phiStar = Math.sqrt(phi * phi + periods * safeVol * safeVol);
+  return clamp(phiStar * GLICKO_SCALE, MIN_RD, MAX_RD);
+}
+
 export function updateGlicko2(
   rating: number,
   rd: number,
@@ -24,27 +60,44 @@ export function updateGlicko2(
   opponents: GlickoOpponent[],
   tau = 0.5
 ): { rating: number; rd: number; vol: number } {
+  assertFinite('rating', rating);
+  assertFinite('RD', rd);
+  assertFinite('volatility', vol);
+  assertFinite('tau', tau);
+  if (vol <= 0) throw new Error('Glicko-2 volatility must be greater than zero.');
+  if (tau <= 0) throw new Error('Glicko-2 tau must be greater than zero.');
+
   if (opponents.length === 0) {
-    // No games this period — per the algorithm, RD grows toward uncertainty, nothing else moves.
-    const phi = rd / SCALE;
-    const phiStar = Math.sqrt(phi * phi + vol * vol);
-    return { rating, rd: phiStar * SCALE, vol };
+    return { rating, rd: advanceGlickoRd(rd, vol), vol };
   }
 
-  const mu = (rating - 1500) / SCALE;
-  const phi = rd / SCALE;
+  const mu = (rating - 1500) / GLICKO_SCALE;
+  const phi = clamp(rd, MIN_RD, MAX_RD) / GLICKO_SCALE;
 
   let vInv = 0;
   let deltaSum = 0;
   for (const opp of opponents) {
-    const muJ = (opp.rating - 1500) / SCALE;
-    const phiJ = opp.rd / SCALE;
+    assertFinite('opponent rating', opp.rating);
+    assertFinite('opponent RD', opp.rd);
+    assertFinite('opponent score', opp.score);
+    const weight = opp.weight ?? 1;
+    const ratingWeight = opp.ratingWeight ?? weight;
+    assertFinite('opponent weight', weight);
+    assertFinite('opponent rating weight', ratingWeight);
+    if (weight < 0 || ratingWeight < 0 || opp.score < 0 || opp.score > 1) {
+      throw new Error('Glicko-2 opponent weights must be non-negative and scores must be in [0, 1].');
+    }
+    if (weight === 0) continue;
+
+    const muJ = (opp.rating - 1500) / GLICKO_SCALE;
+    const phiJ = clamp(opp.rd, MIN_RD, MAX_RD) / GLICKO_SCALE;
     const gPhiJ = g(phiJ);
     const e = expectedScore(mu, muJ, phiJ);
-    const weight = opp.weight ?? 1;
     vInv += weight * gPhiJ * gPhiJ * e * (1 - e);
-    const ratingWeight = opp.ratingWeight ?? weight;
     deltaSum += ratingWeight * gPhiJ * (opp.score - e);
+  }
+  if (vInv <= 0 || !Number.isFinite(vInv)) {
+    return { rating, rd: advanceGlickoRd(rd, vol), vol };
   }
   const v = 1 / vInv;
   const delta = v * deltaSum;
@@ -76,19 +129,18 @@ export function updateGlicko2(
     if (Math.abs(denom) < 1e-12) break;
     const C = A + ((A - B) * fA) / denom;
     const fC = f(C);
-    if (fC * fB < 0) { A = B; fA = fB; } else { fA = fA / 2; }
+    if (fC * fB <= 0) { A = B; fA = fB; } else { fA = fA / 2; }
     B = C; fB = fC;
   }
   let newVol = Number.isFinite(A) ? Math.exp(A / 2) : vol;
-  // Volatility safety clamp (standard Glicko-2 constraint)
-  newVol = Math.max(0.01, Math.min(0.15, newVol));
+  newVol = clamp(newVol, MIN_VOLATILITY, MAX_VOLATILITY);
 
   const phiStar = Math.sqrt(phi * phi + newVol * newVol);
   const newPhi = 1 / Math.sqrt(1 / (phiStar * phiStar) + 1 / v);
   const newMu = mu + newPhi * newPhi * deltaSum;
 
-  const newRating = Math.max(100, newMu * SCALE + 1500);
-  const newRd = Math.max(30, Math.min(350, newPhi * SCALE));
+  const newRating = Math.max(100, newMu * GLICKO_SCALE + 1500);
+  const newRd = clamp(newPhi * GLICKO_SCALE, MIN_RD, MAX_RD);
 
   return { rating: newRating, rd: newRd, vol: newVol };
 }

@@ -1,4 +1,4 @@
-import { db } from '../db';
+import { db, leaderboardScoreSql } from '../db';
 import { playerRatingStateTable } from '../db/schema';
 import { and, eq, isNotNull, sql } from 'drizzle-orm';
 
@@ -78,18 +78,23 @@ export interface RankThresholdBand {
   maxRating: number;
 }
 
-// In-memory cache of rating cutoff thresholds to avoid heavy database recalculations on every slash command
-let cachedCutoffs: { timestamp: number; totalPlayers: number; ratings: number[] } | null = null;
+interface ActiveRating {
+  score: number;
+  rating: number;
+}
+
+// In-memory cache of score-ordered players to avoid heavy database queries on every slash command.
+let cachedCutoffs: { timestamp: number; players: ActiveRating[] } | null = null;
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
-async function getActiveRatings(): Promise<number[]> {
+async function getActivePlayers(): Promise<ActiveRating[]> {
   const now = Date.now();
   if (cachedCutoffs && now - cachedCutoffs.timestamp < CACHE_TTL_MS) {
-    return cachedCutoffs.ratings;
+    return cachedCutoffs.players;
   }
 
   const rows = await db
-    .select({ rating: playerRatingStateTable.rating })
+    .select({ score: sql<number>`${leaderboardScoreSql()}`.as('score'), rating: playerRatingStateTable.rating })
     .from(playerRatingStateTable)
     .where(
       and(
@@ -97,15 +102,21 @@ async function getActiveRatings(): Promise<number[]> {
         isNotNull(playerRatingStateTable.lastProcessedCupId)
       )
     )
-    .orderBy(sql`${playerRatingStateTable.rating} DESC`);
+    .orderBy(
+      sql`${leaderboardScoreSql()} DESC`,
+      sql`${playerRatingStateTable.rating} DESC`,
+      sql`${playerRatingStateTable.accountId} ASC`,
+    );
 
-  const ratings = rows.map(r => r.rating);
   cachedCutoffs = {
     timestamp: now,
-    totalPlayers: ratings.length,
-    ratings,
+    players: rows,
   };
-  return ratings;
+  return rows;
+}
+
+export function invalidateRankThresholdCache(): void {
+  cachedCutoffs = null;
 }
 
 /**
@@ -113,12 +124,12 @@ async function getActiveRatings(): Promise<number[]> {
  * in the active player database.
  */
 export async function getPlayerTier(
-  playerRating: number,
+  playerScore: number,
   playerRankIndex?: number,
   totalPlayersCount?: number
 ): Promise<PlayerRankTierInfo> {
-  const ratings = await getActiveRatings();
-  const total = totalPlayersCount ?? ratings.length;
+  const players = await getActivePlayers();
+  const total = totalPlayersCount ?? players.length;
 
   if (total === 0) {
     const unranked = RL_RANKS[RL_RANKS.length - 1];
@@ -137,10 +148,10 @@ export async function getPlayerTier(
   if (playerRankIndex !== undefined) {
     percentile = (playerRankIndex - 1) / total;
   } else {
-    // Binary search / find rank by rating
+    // Find rank by the same confidence-adjusted score used by the leaderboard.
     let rankPos = 1;
-    for (const r of ratings) {
-      if (r > playerRating) rankPos++;
+    for (const player of players) {
+      if (player.score > playerScore) rankPos++;
       else break;
     }
     percentile = (rankPos - 1) / total;
@@ -200,21 +211,21 @@ export async function getPlayerTier(
  * Calculates rating threshold bands for all ranks to render background zones in charts.
  */
 export async function getRankThresholdBands(): Promise<RankThresholdBand[]> {
-  const ratings = await getActiveRatings();
-  if (ratings.length === 0) return [];
+  const players = await getActivePlayers();
+  if (players.length === 0) return [];
 
   const bands: RankThresholdBand[] = [];
-  let prevRating = ratings[0] + 50;
+  let prevRating = players[0].rating + 50;
   let prevIdx = -1;
 
   for (let i = 0; i < RL_RANKS.length; i++) {
     const r = RL_RANKS[i];
-    const rawIdx = Math.floor(ratings.length * r.topPercent);
+    const rawIdx = Math.floor(players.length * r.topPercent);
     const targetIdx =
       i === RL_RANKS.length - 1
-        ? ratings.length - 1
-        : Math.min(ratings.length - 1, Math.max(prevIdx + 1, rawIdx));
-    const cutoffRating = ratings[targetIdx];
+        ? players.length - 1
+        : Math.min(players.length - 1, Math.max(prevIdx + 1, rawIdx));
+    const cutoffRating = players[targetIdx].rating;
 
     bands.push({
       rank: r,

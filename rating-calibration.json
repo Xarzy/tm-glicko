@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "initialRating": 1400,
+  "initialRd": 250,
+  "initialVolatility": 0.1,
+  "rankPerformanceSoftness": 0.006,
+  "tournamentInformation": 0.55,
+  "ratingEvidenceMultiplier": 1.05,
+  "provisionalMinimum": 0.7,
+  "provisionalCups": 225,
+  "tau": 0.5
+}

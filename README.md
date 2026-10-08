@@ -82,7 +82,39 @@ The bot registers slash commands from `src/commands/`:
 4. Rating state and history are stored in SQLite.
 5. Discord commands read from that database and render formatted results.
 
+## Rating model
+
+Qualifying is rated as one calibrated Glicko-2 tournament period. The
+leaderboard is represented by rank-quantile opponents covering the whole field,
+with continuous placement outcomes: finishing ahead is always at least a draw,
+and finishing behind is always at most a draw. This avoids discontinuities from
+treating adjacent placements as a near-loss while keeping opponent rating and
+uncertainty relevant to every update.
+
+The rating is uncapped. The calibration objective is for the top 10 players to
+land between 2900 and 2920 with no more than 20 points between the highest and
+lowest of them. This is a replay-calibration target, not a ceiling or a display
+offset; it is not considered achieved until a historical replay demonstrates
+it without implausible rating changes. A large fall is still possible after a
+result that is surprising for the player's rating deviation and the field they
+faced.
+
+Leaderboard rank, percentile tier, and graph rank-zone cutoffs use the same
+confidence-adjusted ordering:
+
+`rating - 0.5 × RD`
+
+Commands continue to display raw rating and RD separately. RD expands when a
+player returns after inactivity, then decreases again when informative results
+are recorded.
+
 ## Useful maintenance scripts
+
+- Evaluate the calibrated model against stored leaderboards without writing to the database:
+
+```bash
+bun run scripts/evaluateRatingCalibration.ts
+```
 
 - Recalculate all qualifying ratings from stored leaderboard history:
 
@@ -105,6 +137,11 @@ bun run scripts/fetchLeaderboards.ts
 ## Database
 
 The schema is defined in `src/db/schema.ts` and managed with Drizzle. The default database connection uses `DB_FILE_NAME` and falls back to `local.db` when unset.
+
+After deploying this revision, generate and apply the Drizzle migration for
+`last_rated_at`, then run the rating recalculation script. Existing history rows
+contain values produced by the old formula and must be replayed to make charts
+and rating state consistent.
 
 ## Notes
 

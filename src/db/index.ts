@@ -15,6 +15,15 @@ import {
   type InsertPlayerRatingHistory,
 } from './schema.ts';
 
+export const LEADERBOARD_CONFIDENCE_MULTIPLIER = 0.5;
+
+export function leaderboardScore(rating: number, rd: number): number {
+  return rating - rd * LEADERBOARD_CONFIDENCE_MULTIPLIER;
+}
+
+export const leaderboardScoreSql = () =>
+  sql`${playerRatingStateTable.rating} - ${playerRatingStateTable.rd} * ${LEADERBOARD_CONFIDENCE_MULTIPLIER}`;
+
 const dbPath = (process.env.DB_FILE_NAME || 'local.db').replace(/^file:/, '');
 const sqlite = new Database(dbPath);
 // Enable WAL mode for better concurrency and performance
@@ -36,6 +45,7 @@ const DEFAULT_STATE: Omit<SelectPlayerRatingState, 'accountId' | 'mode' | 'updat
   peakRating: 1500,
   previousRating: null,
   lastProcessedCupId: null,
+  lastRatedAt: null,
   lastFetchedAt: null,
 };
 
@@ -77,18 +87,27 @@ export async function upsertPlayerRatingState(
 
 export async function getRatingRank(
   mode: RatingMode,
+  accountId: string,
   rating: number,
   rd: number,
 ): Promise<{ rank: number; total: number }> {
   try {
-    const conservativeRating = rating - rd * 0.5;
+    const score = leaderboardScore(rating, rd);
     const [aheadResult, totalResult] = await Promise.all([
       db.select({ count: sql<number>`count(*)` })
         .from(playerRatingStateTable)
         .where(and(
           eq(playerRatingStateTable.mode, mode),
           isNotNull(playerRatingStateTable.lastProcessedCupId),
-          sql`${playerRatingStateTable.rating} - ${playerRatingStateTable.rd} * 0.5 > ${conservativeRating}`,
+          sql`(
+            ${leaderboardScoreSql()} > ${score}
+            OR (${leaderboardScoreSql()} = ${score} AND ${playerRatingStateTable.rating} > ${rating})
+            OR (
+              ${leaderboardScoreSql()} = ${score}
+              AND ${playerRatingStateTable.rating} = ${rating}
+              AND ${playerRatingStateTable.accountId} < ${accountId}
+            )
+          )`,
         )),
       db.select({ count: sql<number>`count(*)` })
         .from(playerRatingStateTable)
@@ -123,7 +142,11 @@ export async function getPlayerRatingStateByRank(
 
     const row = await db.query.playerRatingStateTable.findFirst({
       where: and(eq(playerRatingStateTable.mode, mode), isNotNull(playerRatingStateTable.lastProcessedCupId)),
-      orderBy: [sql`${playerRatingStateTable.rating} - ${playerRatingStateTable.rd} * 0.5 DESC`],
+      orderBy: [
+        sql`${leaderboardScoreSql()} DESC`,
+        sql`${playerRatingStateTable.rating} DESC`,
+        asc(playerRatingStateTable.accountId),
+      ],
       offset: rank - 1,
     });
 
@@ -155,6 +178,10 @@ export async function getCupsNeedingLeaderboards(): Promise<SelectCotdDay[]> {
       sql`${cotdDaysTable.qualifierChallengeId} IS NULL OR NOT EXISTS (
         SELECT 1 FROM ${challengeLeaderboardsTable}
         WHERE ${challengeLeaderboardsTable.challengeId} = ${cotdDaysTable.qualifierChallengeId}
+      ) OR EXISTS (
+        SELECT 1 FROM ${challengeLeaderboardsTable}
+        WHERE ${challengeLeaderboardsTable.challengeId} = ${cotdDaysTable.qualifierChallengeId}
+        AND ${challengeLeaderboardsTable.score} IS NULL
       )`
     )
     .orderBy(asc(cotdDaysTable.startDate));
@@ -219,6 +246,7 @@ export async function batchUpsertRatingStates(
           peakRating: sql`excluded.peak_rating`,
           previousRating: sql`excluded.previous_rating`,
           lastProcessedCupId: sql`excluded.last_processed_cup_id`,
+          lastRatedAt: sql`excluded.last_rated_at`,
           updatedAt: sql`excluded.updated_at`,
         },
       });
@@ -239,10 +267,13 @@ export async function batchReplaceRatingStates(
   await batchUpsertRatingStates(updates as any);
 }
 
-export async function getChallengeLeaderboard(challengeId: number): Promise<{ player: string; rank: number }[]> {
+export async function getChallengeLeaderboard(
+  challengeId: number,
+): Promise<{ player: string; rank: number; score: number | null }[]> {
   const rows = await db.select({
     player: challengeLeaderboardsTable.player,
     rank: challengeLeaderboardsTable.rank,
+    score: challengeLeaderboardsTable.score,
   })
     .from(challengeLeaderboardsTable)
     .where(eq(challengeLeaderboardsTable.challengeId, challengeId))
@@ -253,19 +284,26 @@ export async function getChallengeLeaderboard(challengeId: number): Promise<{ pl
 
 export async function saveChallengeLeaderboard(
   challengeId: number,
-  results: { player: string; rank: number }[]
+  results: { player: string; rank: number; score?: number | null }[]
 ) {
   if (results.length === 0) return;
   const rows: InsertChallengeLeaderboard[] = results.map(r => ({
     challengeId,
     player: r.player,
     rank: r.rank,
+    score: r.score ?? null,
   }));
 
-    await db.transaction(async (tx) => {
+  await db.transaction(async (tx) => {
     for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
       const chunk = rows.slice(i, i + CHUNK_SIZE);
-      await tx.insert(challengeLeaderboardsTable).values(chunk).onConflictDoNothing();
+      await tx.insert(challengeLeaderboardsTable).values(chunk).onConflictDoUpdate({
+        target: [challengeLeaderboardsTable.challengeId, challengeLeaderboardsTable.player],
+        set: {
+          rank: sql`excluded.rank`,
+          score: sql`excluded.score`,
+        },
+      });
     }
   });
 }
@@ -283,7 +321,7 @@ export async function batchInsertRatingHistory(entries: InsertPlayerRatingHistor
 export async function getRatingHistoryForAccounts(
   accountIds: string[],
   mode: RatingMode = 'qualifying'
-): Promise<{ accountId: string; cotdDate: string; rating: number; cupId: number }[]> {
+): Promise<{ accountId: string; cotdDate: string; rating: number; cupId: number; isFlagged: boolean }[]> {
   if (accountIds.length === 0) return [];
   return db
     .select({
@@ -291,6 +329,7 @@ export async function getRatingHistoryForAccounts(
       cotdDate: playerRatingHistoryTable.cotdDate,
       rating: playerRatingHistoryTable.rating,
       cupId: playerRatingHistoryTable.cupId,
+      isFlagged: playerRatingHistoryTable.isFlagged,
     })
     .from(playerRatingHistoryTable)
     .where(
