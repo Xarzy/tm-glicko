@@ -132,3 +132,4 @@ dist
 
 # Database
 local.db**
+.db-import-progress.json*

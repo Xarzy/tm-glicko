@@ -54,6 +54,9 @@ DISCORD_BOT_TOKEN=your_discord_bot_token
 DISCORD_BOT_CLIENT_ID=your_discord_application_id
 DISCORD_GUILD_ID=optional_test_guild_id
 DB_FILE_NAME=local.db
+# Optional: set these to use a hosted LibSQL database instead of local SQLite.
+LIBSQL_URL=
+LIBSQL_AUTH_TOKEN=
 TRACKMANIA_OAUTH_CLIENT_ID=your_trackmania_oauth_client_id
 TRACKMANIA_OAUTH_CLIENT_SECRET=your_trackmania_oauth_client_secret
 NADEO_SERVER_LOGIN=your_nadeo_login
@@ -142,12 +145,30 @@ bun run scripts/fetchLeaderboards.ts
 
 ## Database
 
-The schema is defined in `src/db/schema.ts` and managed with Drizzle. The default database connection uses `DB_FILE_NAME` and falls back to `local.db` when unset.
+The schema is defined in `src/db/schema.ts` and managed with Drizzle. By
+default, the app uses a local SQLite file (`DB_FILE_NAME`, defaulting to
+`local.db`). To use a hosted LibSQL-compatible database, set `LIBSQL_URL` to
+its `libsql://` or HTTPS endpoint and `LIBSQL_AUTH_TOKEN` if the provider
+requires one (`LIBSQL_TOKEN` is also accepted). When `LIBSQL_URL` is set, the
+local database file is not used.
+PostgreSQL connection strings are not accepted by the LibSQL client.
 
-After deploying this revision, generate and apply the Drizzle migration for
-`last_rated_at`, then run the rating recalculation script. Existing history rows
-contain values produced by the old formula and must be replayed to make charts
-and rating state consistent.
+To initialize an empty hosted database, set `LIBSQL_URL` (and the auth token if
+required), then run `bunx drizzle-kit migrate`. This creates the schema; it
+does not copy data from the local SQLite file. Do not run the initial migration
+against an existing database that already has these tables.
+
+To copy an existing local database, stop the bot, back up `local.db`, and
+ensure the hosted tables are empty. Preview the row counts with
+`bun run scripts/importLocalDatabase.ts --dry-run`, then import with
+`bun run scripts/importLocalDatabase.ts`. The import copies rows in batches,
+preserves primary keys, and verifies destination row counts. If it is
+interrupted, rerun with `--resume`; keep `.db-import-progress.json` until the
+import and verification both complete. The importer will not overwrite
+existing destination rows or start a new import into populated tables.
+
+Existing rating history may also need recalculation after rating-model changes;
+run `bun run scripts/recalculateRatings.ts` when needed.
 
 ## Notes
 

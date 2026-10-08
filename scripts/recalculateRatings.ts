@@ -6,7 +6,6 @@ import {
   getChallengeLeaderboard,
   markCotdDayProcessed,
   batchInsertRatingHistory,
-  runRaw,
 } from '../src/db';
 import {
   applyQualifyingCupResult,
@@ -42,39 +41,11 @@ process.on('SIGINT', () => {
 async function main() {
   const nowMs = () => Date.now();
   const runStartMs = nowMs();
-  let indexRebuildMs = 0;
 
   console.log('[recalculate] Resetting qualifying player ratings and history...');
 
-  // Performance: temporarily drop heavy indexes on the write-hot table.
-  // This drastically reduces insert cost as the history table grows.
-  // (We recreate the indexes implicitly by relying on schema migrations
-  //  at runtime; if your environment doesn't auto-recreate, tell me and
-  //  I'll add explicit CREATE INDEX statements.)
-  console.log('[recalculate] Dropping history indexes for faster inserts...');
-  runRaw('PRAGMA foreign_keys = OFF;');
-  runRaw('DROP INDEX IF EXISTS idx_rating_history_account_mode_date;');
-  runRaw('DROP INDEX IF EXISTS idx_rating_history_cup_id;');
-
-  console.log('[recalculate] Dropping rating state indexes for faster rebuild...');
-  runRaw('DROP INDEX IF EXISTS idx_player_rating_mode_rating;');
-
   await db.delete(playerRatingStateTable).where(eq(playerRatingStateTable.mode, 'qualifying'));
   await db.delete(playerRatingHistoryTable).where(eq(playerRatingHistoryTable.mode, 'qualifying'));
-
-  // Recreate indexes after recalculation.
-  // Note: drizzle doesn't automatically recreate dropped indexes at runtime.
-  // These statements should match the index names created in schema.ts.
-  const recreateIndexes = async () => {
-    const indexStartMs = nowMs();
-    console.log('[recalculate] Recreating history indexes...');
-    await runRaw('CREATE INDEX IF NOT EXISTS idx_rating_history_account_mode_date ON player_rating_history (account_id, mode, cotd_date);');
-    await runRaw('CREATE INDEX IF NOT EXISTS idx_rating_history_cup_id ON player_rating_history (cup_id);');
-
-    console.log('[recalculate] Recreating rating state indexes...');
-    await runRaw('CREATE INDEX IF NOT EXISTS idx_player_rating_mode_rating ON player_rating_state (mode, rating);');
-    indexRebuildMs += nowMs() - indexStartMs;
-  };
 
   console.log('[recalculate] Querying cups with downloaded leaderboards...');
   const cups = await db
@@ -94,7 +65,7 @@ async function main() {
   console.log('[recalculate] Using bounded leaderboard/state loading...');
   const existingStates = new Map<string, any>();
 
-  // Keep pending writes bounded. Larger batches reduce SQLite overhead, but
+  // Keep pending writes bounded. Larger batches reduce database overhead, but
   // 100 cups is small enough to avoid retaining millions of history objects.
   const FLUSH_EVERY_CUPS = 1000;
   let processedCount = 0;
@@ -138,29 +109,12 @@ async function main() {
       );
     }
 
-    // Performance strategy for SQLite:
     // Avoid nested transactions: `batchInsertRatingHistory` already uses
     // its own transaction internally.
 
     if (uniqueStateUpdates.length > 0) {
       const t0 = nowMs();
-      const accountIds = uniqueStateUpdates.map((u: any) => u.accountId);
-      const escapedIds = accountIds.map(id => `'${String(id).replace(/'/g, "''")}'`);
-
-      // Delete affected keys for qualifying mode.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const idList = escapedIds.join(',');
-      runRaw(
-        `DELETE FROM player_rating_state WHERE mode = 'qualifying' AND account_id IN (${idList});`
-      );
-
-      // Insert fresh states.
-      const now = new Date();
-      const rows = uniqueStateUpdates.map((u: any) => ({ ...u, updatedAt: now }));
-      for (let i = 0; i < rows.length; i += 1000) {
-        const chunk = rows.slice(i, i + 1000);
-        await db.insert(playerRatingStateTable).values(chunk);
-      }
+      await batchUpsertRatingStates(uniqueStateUpdates);
 
       totalUpsertMs += nowMs() - t0;
       totalStateRowsWritten += uniqueStateUpdates.length;
@@ -324,7 +278,6 @@ async function main() {
       console.log(`[recalculate] Finished! Successfully recalculated ratings across ${processedCount} cups.`);
     }
   } finally {
-    await recreateIndexes();
     const elapsedMs = nowMs() - runStartMs;
     const elapsedSeconds = elapsedMs / 1000;
     const timedMs = totalUpsertMs + totalHistoryMs + totalMarkMs;
@@ -339,8 +292,7 @@ async function main() {
     console.log(`  state writes: ${(totalUpsertMs / 1000).toFixed(1)}s`);
     console.log(`  history writes: ${(totalHistoryMs / 1000).toFixed(1)}s`);
     console.log(`  processed markers: ${(totalMarkMs / 1000).toFixed(1)}s`);
-    console.log(`  index rebuild: ${(indexRebuildMs / 1000).toFixed(1)}s`);
-    console.log(`  compute/setup/other: ${Math.max(0, (elapsedMs - timedMs - indexRebuildMs) / 1000).toFixed(1)}s`);
+    console.log(`  compute/setup/other: ${Math.max(0, (elapsedMs - timedMs) / 1000).toFixed(1)}s`);
   }
 }
 

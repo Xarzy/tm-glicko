@@ -1,6 +1,6 @@
-import { drizzle } from 'drizzle-orm/bun-sqlite';
-import { Database } from 'bun:sqlite';
-import { inArray, isNotNull, isNull, asc, sql, eq, and, gt } from 'drizzle-orm';
+import { createClient } from '@libsql/client';
+import { drizzle } from 'drizzle-orm/libsql';
+import { inArray, isNotNull, isNull, asc, sql, eq, and } from 'drizzle-orm';
 import * as schema from './schema';
 import {
   cotdDaysTable,
@@ -24,17 +24,22 @@ export function leaderboardScore(rating: number, rd: number): number {
 export const leaderboardScoreSql = () =>
   sql`${playerRatingStateTable.rating} - ${playerRatingStateTable.rd} * ${LEADERBOARD_CONFIDENCE_MULTIPLIER}`;
 
-const dbPath = (process.env.DB_FILE_NAME || 'local.db').replace(/^file:/, '');
-const sqlite = new Database(dbPath);
-// Enable WAL mode for better concurrency and performance
-sqlite.exec('PRAGMA journal_mode = WAL;');
-
-export const db = drizzle(sqlite, { schema });
-
-// Allow raw SQL execution for maintenance tasks (e.g. dropping/recreating indexes during bulk recalcs).
-export function runRaw(sqlText: string) {
-  return sqlite.exec(sqlText);
+const libsqlUrl = process.env.LIBSQL_URL;
+if (libsqlUrl && !/^(libsql|https?):\/\//i.test(libsqlUrl)) {
+  throw new Error('LIBSQL_URL must use the libsql://, https://, or http:// protocol.');
 }
+const dbUrl = libsqlUrl || `file:${(process.env.DB_FILE_NAME || 'local.db').replace(/^file:/, '')}`;
+const authToken = process.env.LIBSQL_AUTH_TOKEN || process.env.LIBSQL_TOKEN;
+const client = createClient({
+  url: dbUrl,
+  ...(authToken ? { authToken } : {}),
+});
+
+if (!libsqlUrl) {
+  await client.execute('PRAGMA journal_mode = WAL;');
+}
+
+export const db = drizzle(client, { schema });
 const CHUNK_SIZE = 1000;
 
 const DEFAULT_STATE: Omit<SelectPlayerRatingState, 'accountId' | 'mode' | 'updatedAt'> = {

@@ -1,4 +1,4 @@
-import { sqliteTable, integer, text, real, primaryKey, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, integer, text, real, primaryKey, index } from 'drizzle-orm/sqlite-core';
 
 export const ratingModeValues = ['qualifying', 'cup'] as const;
 export type RatingMode = typeof ratingModeValues[number];

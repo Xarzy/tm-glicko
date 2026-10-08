@@ -22,9 +22,9 @@ export interface QualifyingRatingConfig {
 }
 
 const DEFAULT_QUALIFYING_RATING_CONFIG: QualifyingRatingConfig = {
-  initialRating: 1400,
-  initialRd: 250,
-  initialVolatility: 0.1,
+  initialRating: 1500,
+  initialRd: 350,
+  initialVolatility: 0.6,
   representativeCount: 32,
   tournamentInformation: .55,
   ratingEvidenceMultiplier: 1.05,
