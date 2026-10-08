@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, escapeMarkdown } from 'discord.js';
-import { getPlayerRatingStateByRank } from '../db';
+import { getPlayerRatingStatesByRankRange } from '../db';
 import { findUsernamesByAccountIds } from '../services/accountLookup';
 
 export const data = new SlashCommandBuilder()
@@ -36,13 +36,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   const mode = 'qualifying' as const;
 
-  const rows: Array<{ rank: number; state: any }> = [];
-  // Fetch only the requested ranks.
-  for (let r = from; r <= to; r++) {
-    const result = await getPlayerRatingStateByRank(mode, r);
-    if (!result) break;
-    rows.push({ rank: r, state: result.state });
-  }
+  const { states } = await getPlayerRatingStatesByRankRange(mode, from, requested);
+  const rows = states.map((state, index) => ({ rank: from + index, state }));
 
   if (rows.length === 0) {
     await interaction.editReply(`No players found for ranks **#${from}–#${to}**.`);
@@ -69,7 +64,31 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return `#${rank} — ${username} — ${Math.round(state.rating)} (${deltaStr})`;
   });
 
-  embed.addFields({ name: `Players (${rows.length})`, value: fieldLines.join('\n'), inline: false });
+  const fields: { name: string; value: string; inline: false }[] = [];
+  let currentLines: string[] = [];
+  let currentLength = 0;
+  for (const line of fieldLines) {
+    const nextLength = currentLength + (currentLines.length > 0 ? 1 : 0) + line.length;
+    if (nextLength > 1024) {
+      fields.push({
+        name: fields.length === 0 ? `Players (${rows.length})` : 'Players (continued)',
+        value: currentLines.join('\n'),
+        inline: false,
+      });
+      currentLines = [];
+      currentLength = 0;
+    }
+    currentLines.push(line);
+    currentLength += (currentLines.length > 1 ? 1 : 0) + line.length;
+  }
+  if (currentLines.length > 0) {
+    fields.push({
+      name: fields.length === 0 ? `Players (${rows.length})` : 'Players (continued)',
+      value: currentLines.join('\n'),
+      inline: false,
+    });
+  }
+  embed.addFields(fields);
 
   await interaction.editReply({ embeds: [embed] });
 }

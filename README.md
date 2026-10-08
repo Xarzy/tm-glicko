@@ -131,6 +131,16 @@ bun run scripts/evaluateRatingCalibration.ts
 bun run scripts/recalculateRatings.ts
 ```
 
+If recalculation stops unexpectedly, continue from its last saved batch with:
+
+```bash
+bun run scripts/recalculateRatings.ts --resume
+```
+
+The script checkpoints to `.rating-recalculation-progress.json` after each
+committed batch. Keep that file until recalculation finishes; starting without
+`--resume` while it exists is refused to avoid discarding progress.
+
 - Backfill historical data:
 
 ```bash

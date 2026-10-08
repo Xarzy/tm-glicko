@@ -32,7 +32,11 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const { rank, total } = await getRatingRank('qualifying', state.accountId, state.rating, state.rd);
+  const [rankResult, lastCup] = await Promise.all([
+    getRatingRank('qualifying', state.accountId, state.rating, state.rd),
+    state.lastProcessedCupId === null ? Promise.resolve(null) : getCotdDayById(state.lastProcessedCupId),
+  ]);
+  const { rank, total } = rankResult;
   const tierInfo = await getPlayerTier(leaderboardScore(state.rating, state.rd), rank, total);
 
   const ratingChange =
@@ -41,11 +45,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       : null;
 
   let changeDateStr = '';
-  if (state.lastProcessedCupId !== null) {
-    const lastCup = await getCotdDayById(state.lastProcessedCupId);
-    if (lastCup?.startDate) {
-      changeDateStr = ` on ${formatDate(new Date(lastCup.startDate))}`;
-    }
+  if (lastCup?.startDate) {
+    changeDateStr = ` on ${formatDate(new Date(lastCup.startDate))}`;
   }
 
   const formattedLatestChange =

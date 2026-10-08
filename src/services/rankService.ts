@@ -1,6 +1,6 @@
 import { db, leaderboardScoreSql } from '../db';
 import { playerRatingStateTable } from '../db/schema';
-import { and, eq, isNotNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 
 export interface RankDefinition {
   code: string;       // e.g. 'ssl', 'gc3', 'd1'
@@ -85,6 +85,7 @@ interface ActiveRating {
 
 // In-memory cache of score-ordered players to avoid heavy database queries on every slash command.
 let cachedCutoffs: { timestamp: number; players: ActiveRating[] } | null = null;
+let cachedRankBands: { timestamp: number; bands: RankThresholdBand[] } | null = null;
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 async function getActivePlayers(): Promise<ActiveRating[]> {
@@ -117,6 +118,7 @@ async function getActivePlayers(): Promise<ActiveRating[]> {
 
 export function invalidateRankThresholdCache(): void {
   cachedCutoffs = null;
+  cachedRankBands = null;
 }
 
 /**
@@ -128,7 +130,9 @@ export async function getPlayerTier(
   playerRankIndex?: number,
   totalPlayersCount?: number
 ): Promise<PlayerRankTierInfo> {
-  const players = await getActivePlayers();
+  const players = playerRankIndex !== undefined && totalPlayersCount !== undefined
+    ? []
+    : await getActivePlayers();
   const total = totalPlayersCount ?? players.length;
 
   if (total === 0) {
@@ -211,30 +215,84 @@ export async function getPlayerTier(
  * Calculates rating threshold bands for all ranks to render background zones in charts.
  */
 export async function getRankThresholdBands(): Promise<RankThresholdBand[]> {
-  const players = await getActivePlayers();
-  if (players.length === 0) return [];
+  const now = Date.now();
+  if (cachedRankBands && now - cachedRankBands.timestamp < CACHE_TTL_MS) {
+    return cachedRankBands.bands;
+  }
+
+  const [countResult] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(playerRatingStateTable)
+    .where(
+      and(
+        eq(playerRatingStateTable.mode, 'qualifying'),
+        isNotNull(playerRatingStateTable.lastProcessedCupId)
+      )
+    );
+  const totalPlayers = countResult?.count ?? 0;
+  if (totalPlayers === 0) {
+    cachedRankBands = { timestamp: now, bands: [] };
+    return [];
+  }
+
+  const targetIndices: number[] = [0];
+  let prevIdx = -1;
+  for (let i = 0; i < RL_RANKS.length; i++) {
+    const targetIdx = i === RL_RANKS.length - 1
+      ? totalPlayers - 1
+      : Math.min(
+        totalPlayers - 1,
+        Math.max(prevIdx + 1, Math.floor(totalPlayers * RL_RANKS[i].topPercent))
+      );
+    targetIndices.push(targetIdx);
+    prevIdx = targetIdx;
+  }
+
+  const rankedPlayers = db.$with('ranked_players').as(
+    db.select({
+      rankIndex: sql<number>`row_number() over (
+        order by ${leaderboardScoreSql()} desc,
+          ${playerRatingStateTable.rating} desc,
+          ${playerRatingStateTable.accountId} asc
+      ) - 1`.as('rank_index'),
+      rating: playerRatingStateTable.rating,
+    })
+      .from(playerRatingStateTable)
+      .where(
+        and(
+          eq(playerRatingStateTable.mode, 'qualifying'),
+          isNotNull(playerRatingStateTable.lastProcessedCupId)
+        )
+      )
+  );
+  const cutoffRows = await db.with(rankedPlayers)
+    .select({ rankIndex: rankedPlayers.rankIndex, rating: rankedPlayers.rating })
+    .from(rankedPlayers)
+    .where(inArray(rankedPlayers.rankIndex, targetIndices));
+  const ratingByIndex = new Map(cutoffRows.map(row => [row.rankIndex, row.rating]));
+  const firstRating = ratingByIndex.get(0);
+  if (firstRating === undefined) {
+    throw new Error('Could not load the top active player rating for chart thresholds.');
+  }
 
   const bands: RankThresholdBand[] = [];
-  let prevRating = players[0].rating + 50;
-  let prevIdx = -1;
-
+  let prevRating = firstRating + 50;
   for (let i = 0; i < RL_RANKS.length; i++) {
-    const r = RL_RANKS[i];
-    const rawIdx = Math.floor(players.length * r.topPercent);
-    const targetIdx =
-      i === RL_RANKS.length - 1
-        ? players.length - 1
-        : Math.min(players.length - 1, Math.max(prevIdx + 1, rawIdx));
-    const cutoffRating = players[targetIdx].rating;
+    const rank = RL_RANKS[i];
+    const targetIdx = targetIndices[i + 1];
+    const cutoffRating = ratingByIndex.get(targetIdx);
+    if (cutoffRating === undefined) {
+      throw new Error(`Could not load rank threshold rating at leaderboard position ${targetIdx}.`);
+    }
 
     bands.push({
-      rank: r,
+      rank,
       maxRating: prevRating,
       minRating: cutoffRating,
     });
     prevRating = cutoffRating;
-    prevIdx = targetIdx;
   }
 
+  cachedRankBands = { timestamp: now, bands };
   return bands;
 }

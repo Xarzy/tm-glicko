@@ -1,11 +1,11 @@
+import { existsSync, readFileSync, renameSync, writeFileSync, unlinkSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { db } from '../src/db';
 import { cotdDaysTable, playerRatingStateTable, playerRatingHistoryTable } from '../src/db/schema';
 import {
   getStatesForAccounts,
-  batchUpsertRatingStates,
   getChallengeLeaderboard,
   markCotdDayProcessed,
-  batchInsertRatingHistory,
 } from '../src/db';
 import {
   applyQualifyingCupResult,
@@ -17,6 +17,7 @@ import {
 import { invalidateRankThresholdCache } from '../src/services/rankService';
 import { asc, eq, sql } from 'drizzle-orm';
 
+const PROGRESS_FILE = resolve('.rating-recalculation-progress.json');
 const DEFAULT_STATE = {
   rating: QUALIFYING_RATING_CONFIG.initialRating,
   rd: QUALIFYING_RATING_CONFIG.initialRd,
@@ -27,6 +28,31 @@ const DEFAULT_STATE = {
   lastProcessedCupId: null,
   lastRatedAt: null,
 };
+
+interface RecalculationProgress {
+  lastCupId: number | null;
+}
+
+function saveProgress(progress: RecalculationProgress): void {
+  const temporaryPath = `${PROGRESS_FILE}.tmp`;
+  writeFileSync(temporaryPath, JSON.stringify(progress));
+  renameSync(temporaryPath, PROGRESS_FILE);
+}
+
+function readProgress(): RecalculationProgress {
+  if (!existsSync(PROGRESS_FILE)) {
+    throw new Error('No recalculation checkpoint found. Start a new run without --resume.');
+  }
+  const progress = JSON.parse(readFileSync(PROGRESS_FILE, 'utf8')) as RecalculationProgress;
+  if (
+    !progress
+    || (progress.lastCupId !== null
+      && (!Number.isSafeInteger(progress.lastCupId) || progress.lastCupId < 0))
+  ) {
+    throw new Error(`Invalid recalculation checkpoint in ${PROGRESS_FILE}.`);
+  }
+  return progress;
+}
 
 let stopRequested = false;
 process.on('SIGINT', () => {
@@ -39,13 +65,27 @@ process.on('SIGINT', () => {
 });
 
 async function main() {
+  const args = new Set(process.argv.slice(2));
+  if ([...args].some(arg => arg !== '--resume') || args.size !== process.argv.length - 2) {
+    throw new Error('Usage: bun run scripts/recalculateRatings.ts [--resume]');
+  }
+  const resume = args.has('--resume');
+  if (!resume && existsSync(PROGRESS_FILE)) {
+    throw new Error(`A recalculation checkpoint already exists at ${PROGRESS_FILE}. Use --resume.`);
+  }
+  let progress = resume ? readProgress() : { lastCupId: null };
+  if (!resume) saveProgress(progress);
+
   const nowMs = () => Date.now();
   const runStartMs = nowMs();
 
-  console.log('[recalculate] Resetting qualifying player ratings and history...');
-
-  await db.delete(playerRatingStateTable).where(eq(playerRatingStateTable.mode, 'qualifying'));
-  await db.delete(playerRatingHistoryTable).where(eq(playerRatingHistoryTable.mode, 'qualifying'));
+  if (resume) {
+    console.log(`[recalculate] Resuming after cup ${progress.lastCupId ?? '(start)'}.`);
+  } else {
+    console.log('[recalculate] Resetting qualifying player ratings and history...');
+    await db.delete(playerRatingStateTable).where(eq(playerRatingStateTable.mode, 'qualifying'));
+    await db.delete(playerRatingHistoryTable).where(eq(playerRatingHistoryTable.mode, 'qualifying'));
+  }
 
   console.log('[recalculate] Querying cups with downloaded leaderboards...');
   const cups = await db
@@ -59,18 +99,29 @@ async function main() {
     .orderBy(asc(cotdDaysTable.startDate));
 
   console.log(`[recalculate] Found ${cups.length} cups with saved leaderboards to recalculate.`);
+  let startCupIndex = 0;
+  if (progress.lastCupId !== null) {
+    const checkpointIndex = cups.findIndex(day => day.cupId === progress.lastCupId);
+    if (checkpointIndex < 0) {
+      throw new Error(
+        `Checkpoint cup ${progress.lastCupId} is not in the current leaderboard history. `
+        + `Do not delete ${PROGRESS_FILE}; inspect the database before continuing.`,
+      );
+    }
+    startCupIndex = checkpointIndex + 1;
+  }
 
   // Keep only chronological player state in memory. Leaderboards are loaded
   // one cup at a time and unseen players are fetched lazily.
   console.log('[recalculate] Using bounded leaderboard/state loading...');
   const existingStates = new Map<string, any>();
 
-  // Keep pending writes bounded. Larger batches reduce database overhead, but
-  // 100 cups is small enough to avoid retaining millions of history objects.
-  const FLUSH_EVERY_CUPS = 1000;
+  // Flush regularly so a restart only needs to replay a small number of cups.
+  const FLUSH_EVERY_CUPS = 75;
   let processedCount = 0;
   let pendingHistory: any[] = [];
   let pendingStateUpdates: any[] = [];
+  let lastVisitedCupId = progress.lastCupId;
 
   let totalUpsertMs = 0;
   let totalHistoryMs = 0;
@@ -109,33 +160,59 @@ async function main() {
       );
     }
 
-    // Avoid nested transactions: `batchInsertRatingHistory` already uses
-    // its own transaction internally.
-
-    if (uniqueStateUpdates.length > 0) {
-      const t0 = nowMs();
-      await batchUpsertRatingStates(uniqueStateUpdates);
-
-      totalUpsertMs += nowMs() - t0;
-      totalStateRowsWritten += uniqueStateUpdates.length;
-    }
-
-    if (historyEntries.length > 0) {
-      const t0 = nowMs();
-      await batchInsertRatingHistory(historyEntries);
-      totalHistoryMs += nowMs() - t0;
-      totalHistoryRowsWritten += historyEntries.length;
+    let upsertDuration = 0;
+    let historyDuration = 0;
+    await db.transaction(async tx => {
+      let t0 = nowMs();
+      for (let i = 0; i < uniqueStateUpdates.length; i += 1000) {
+        const updatedAt = new Date();
+        const chunk = uniqueStateUpdates
+          .slice(i, i + 1000)
+          .map(update => ({ ...update, updatedAt }));
+        await tx.insert(playerRatingStateTable).values(chunk).onConflictDoUpdate({
+          target: [playerRatingStateTable.accountId, playerRatingStateTable.mode],
+          set: {
+            rating: sql`excluded.rating`,
+            rd: sql`excluded.rd`,
+            vol: sql`excluded.vol`,
+            matchCount: sql`excluded.match_count`,
+            peakRating: sql`excluded.peak_rating`,
+            previousRating: sql`excluded.previous_rating`,
+            lastProcessedCupId: sql`excluded.last_processed_cup_id`,
+            lastRatedAt: sql`excluded.last_rated_at`,
+            updatedAt: sql`excluded.updated_at`,
+          },
+        });
+      }
+      upsertDuration = nowMs() - t0;
+      t0 = nowMs();
+      for (let i = 0; i < historyEntries.length; i += 1000) {
+        await tx.insert(playerRatingHistoryTable).values(historyEntries.slice(i, i + 1000));
+      }
+      historyDuration = nowMs() - t0;
+    });
+    totalUpsertMs += upsertDuration;
+    totalHistoryMs += historyDuration;
+    totalStateRowsWritten += uniqueStateUpdates.length;
+    totalHistoryRowsWritten += historyEntries.length;
+    if (lastVisitedCupId !== null) {
+      progress = { lastCupId: lastVisitedCupId };
+      saveProgress(progress);
     }
   };
 
-  const totalCupsToProcess = cups.length;
-  for (let cupIdx = 0; cupIdx < cups.length; cupIdx++) {
+  const totalCupsToProcess = cups.length - startCupIndex;
+  for (let cupIdx = startCupIndex; cupIdx < cups.length; cupIdx++) {
     const day = cups[cupIdx];
     if (stopRequested) break;
-    if (!day.qualifierChallengeId) continue;
+    if (!day.qualifierChallengeId) {
+      lastVisitedCupId = day.cupId;
+      continue;
+    }
 
     const allResults = await getChallengeLeaderboard(day.qualifierChallengeId);
     if (allResults.length === 0) {
+      lastVisitedCupId = day.cupId;
       continue; // Skip cups whose leaderboards haven't been fetched yet
     }
 
@@ -249,6 +326,7 @@ async function main() {
     const tMark0 = nowMs();
     await markCotdDayProcessed(day.cupId, cardinal);
     totalMarkMs += nowMs() - tMark0;
+    lastVisitedCupId = day.cupId;
     processedCount++;
     console.log(
       `[recalculate] (${processedCount}) Processed cup ${day.cupId} (${day.name}) with ${allResults.length} players`
@@ -269,6 +347,10 @@ async function main() {
 
   // final flush
   await flushPending();
+  if (lastVisitedCupId !== null) {
+    progress = { lastCupId: lastVisitedCupId };
+    saveProgress(progress);
+  }
   invalidateRankThresholdCache();
 
   try {
@@ -276,6 +358,7 @@ async function main() {
       console.log(`[recalculate] Exited cleanly. Processed ${processedCount} cups before stopping.`);
     } else {
       console.log(`[recalculate] Finished! Successfully recalculated ratings across ${processedCount} cups.`);
+      if (existsSync(PROGRESS_FILE)) unlinkSync(PROGRESS_FILE);
     }
   } finally {
     const elapsedMs = nowMs() - runStartMs;
@@ -285,7 +368,7 @@ async function main() {
 
     console.log('[recalculate] Run metrics:');
     console.log(`  wall time: ${elapsedSeconds.toFixed(1)}s`);
-    console.log(`  cups processed: ${processedCount} / ${cups.length}`);
+    console.log(`  cups processed: ${processedCount} / ${totalCupsToProcess}`);
     console.log(`  average throughput: ${processedCount > 0 ? (processedCount / elapsedSeconds).toFixed(2) : '0.00'} cups/s (${averageCupSeconds.toFixed(2)}s/cup)`);
     console.log(`  state rows written: ${totalStateRowsWritten}`);
     console.log(`  history rows written: ${totalHistoryRowsWritten}`);
@@ -296,4 +379,7 @@ async function main() {
   }
 }
 
-main();
+main().catch(error => {
+  console.error('[recalculate] Failed:', error instanceof Error ? error.message : error);
+  process.exitCode = 1;
+});

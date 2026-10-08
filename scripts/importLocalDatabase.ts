@@ -4,16 +4,18 @@ import { createClient, type InValue } from '@libsql/client';
 
 const TABLES = [
   {
-    name: 'cotd_days',
+    name: 'player_rating_state',
     columns: [
-      'cup_id', 'cotd_date', 'competition_id', 'name', 'start_date',
-      'qualifier_challenge_id', 'cardinal', 'processed_at',
+      'account_id', 'mode', 'rating', 'rd', 'vol', 'match_count', 'peak_rating',
+      'previous_rating', 'last_processed_cup_id', 'last_rated_at', 'last_fetched_at', 'updated_at',
     ],
   },
   {
-    name: 'challenge_leaderboards',
-    columns: ['challenge_id', 'player', 'rank', 'score'],
-  }
+    name: 'player_rating_history',
+    columns: [
+      'id', 'account_id', 'cup_id', 'cotd_date', 'mode', 'rating', 'rd', 'rank', 'is_flagged',
+    ],
+  },
 ] as const;
 
 const BATCH_SIZE = 1000;
@@ -112,8 +114,6 @@ async function main(): Promise<void> {
   const destination = createClient({
     url: hostedUrl,
     ...(authToken ? { authToken } : {}),
-    fetch: (input: RequestInfo | URL, init?: RequestInit) =>
-      fetch(input, { ...init, verbose: false } as RequestInit),
   });
 
   try {

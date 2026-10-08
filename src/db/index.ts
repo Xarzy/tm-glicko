@@ -1,6 +1,6 @@
 import { createClient } from '@libsql/client';
 import { drizzle } from 'drizzle-orm/libsql';
-import { inArray, isNotNull, isNull, asc, sql, eq, and } from 'drizzle-orm';
+import { inArray, isNotNull, isNull, asc, sql, eq, and, or, gt } from 'drizzle-orm';
 import * as schema from './schema';
 import {
   cotdDaysTable,
@@ -98,13 +98,13 @@ export async function getRatingRank(
 ): Promise<{ rank: number; total: number }> {
   try {
     const score = leaderboardScore(rating, rd);
-    const [aheadResult, totalResult] = await Promise.all([
-      db.select({ count: sql<number>`count(*)` })
-        .from(playerRatingStateTable)
-        .where(and(
-          eq(playerRatingStateTable.mode, mode),
-          isNotNull(playerRatingStateTable.lastProcessedCupId),
-          sql`(
+    const result = await db.get<{ ahead: number; total: number }>(sql`SELECT
+      (
+        SELECT count(*)
+        FROM ${playerRatingStateTable}
+        WHERE ${playerRatingStateTable.mode} = ${mode}
+          AND ${playerRatingStateTable.lastProcessedCupId} IS NOT NULL
+          AND (
             ${leaderboardScoreSql()} > ${score}
             OR (${leaderboardScoreSql()} = ${score} AND ${playerRatingStateTable.rating} > ${rating})
             OR (
@@ -112,19 +112,19 @@ export async function getRatingRank(
               AND ${playerRatingStateTable.rating} = ${rating}
               AND ${playerRatingStateTable.accountId} < ${accountId}
             )
-          )`,
-        )),
-      db.select({ count: sql<number>`count(*)` })
-        .from(playerRatingStateTable)
-        .where(and(
-          eq(playerRatingStateTable.mode, mode),
-          isNotNull(playerRatingStateTable.lastProcessedCupId),
-        )),
-    ]);
+          )
+      ) AS ahead,
+      (
+        SELECT count(*)
+        FROM ${playerRatingStateTable}
+        WHERE ${playerRatingStateTable.mode} = ${mode}
+          AND ${playerRatingStateTable.lastProcessedCupId} IS NOT NULL
+      ) AS total
+    `);
 
     return {
-      rank: (aheadResult[0]?.count ?? 0) + 1,
-      total: totalResult[0]?.count ?? 0,
+      rank: (result?.ahead ?? 0) + 1,
+      total: result?.total ?? 0,
     };
   } catch (error) {
     console.error(error);
@@ -161,6 +161,52 @@ export async function getPlayerRatingStateByRank(
     console.error('[getPlayerRatingStateByRank] error:', error);
     return null;
   }
+}
+
+export async function getPlayerRatingStatesByRankRange(
+  mode: RatingMode,
+  from: number,
+  limit: number,
+): Promise<{ states: SelectPlayerRatingState[]; total: number }> {
+  if (!Number.isInteger(from) || from < 1 || !Number.isInteger(limit) || limit < 1) {
+    throw new Error('Rank range must use positive integer start and limit values.');
+  }
+
+  const rows = await db
+    .select({
+      accountId: playerRatingStateTable.accountId,
+      mode: playerRatingStateTable.mode,
+      rating: playerRatingStateTable.rating,
+      rd: playerRatingStateTable.rd,
+      vol: playerRatingStateTable.vol,
+      matchCount: playerRatingStateTable.matchCount,
+      peakRating: playerRatingStateTable.peakRating,
+      previousRating: playerRatingStateTable.previousRating,
+      lastProcessedCupId: playerRatingStateTable.lastProcessedCupId,
+      lastRatedAt: playerRatingStateTable.lastRatedAt,
+      lastFetchedAt: playerRatingStateTable.lastFetchedAt,
+      updatedAt: playerRatingStateTable.updatedAt,
+      total: sql<number>`count(*) over()`,
+    })
+    .from(playerRatingStateTable)
+    .where(
+      and(
+        eq(playerRatingStateTable.mode, mode),
+        isNotNull(playerRatingStateTable.lastProcessedCupId),
+      )
+    )
+    .orderBy(
+      sql`${leaderboardScoreSql()} DESC`,
+      sql`${playerRatingStateTable.rating} DESC`,
+      asc(playerRatingStateTable.accountId),
+    )
+    .limit(limit)
+    .offset(from - 1);
+
+  return {
+    states: rows.map(({ total: _total, ...state }) => state),
+    total: rows[0]?.total ?? 0,
+  };
 }
 
 export async function insertCotdDaysIfNew(days: InsertCotdDay[]) {
@@ -326,22 +372,70 @@ export async function batchInsertRatingHistory(entries: InsertPlayerRatingHistor
 export async function getRatingHistoryForAccounts(
   accountIds: string[],
   mode: RatingMode = 'qualifying'
-): Promise<{ accountId: string; cotdDate: string; rating: number; cupId: number; isFlagged: boolean }[]> {
+): Promise<{ accountId: string; cotdDate: string; rating: number; cupId: number }[]> {
   if (accountIds.length === 0) return [];
-  return db
-    .select({
-      accountId: playerRatingHistoryTable.accountId,
-      cotdDate: playerRatingHistoryTable.cotdDate,
-      rating: playerRatingHistoryTable.rating,
-      cupId: playerRatingHistoryTable.cupId,
-      isFlagged: playerRatingHistoryTable.isFlagged,
-    })
-    .from(playerRatingHistoryTable)
-    .where(
-      and(
-        inArray(playerRatingHistoryTable.accountId, accountIds),
-        eq(playerRatingHistoryTable.mode, mode)
-      )
-    )
-    .orderBy(asc(playerRatingHistoryTable.cotdDate));
+  const PAGE_SIZE = 1000;
+  const uniqueAccountIds = Array.from(new Set(accountIds));
+  const histories: { accountId: string; cotdDate: string; rating: number; cupId: number }[][] =
+    Array.from({ length: uniqueAccountIds.length }, () => []);
+  let nextAccountIndex = 0;
+
+  const loadAccountHistory = async (accountId: string) => {
+    const accountHistory: {
+      accountId: string;
+      cotdDate: string;
+      rating: number;
+      cupId: number;
+    }[] = [];
+    let lastDate: string | undefined;
+    let lastId: number | undefined;
+
+    while (true) {
+      const cursor = lastDate === undefined || lastId === undefined
+        ? undefined
+        : or(
+          gt(playerRatingHistoryTable.cotdDate, lastDate),
+          and(
+            eq(playerRatingHistoryTable.cotdDate, lastDate),
+            gt(playerRatingHistoryTable.id, lastId)
+          )
+        );
+      const page = await db
+        .select({
+          id: playerRatingHistoryTable.id,
+          accountId: playerRatingHistoryTable.accountId,
+          cotdDate: playerRatingHistoryTable.cotdDate,
+          rating: playerRatingHistoryTable.rating,
+          cupId: playerRatingHistoryTable.cupId,
+        })
+        .from(playerRatingHistoryTable)
+        .where(
+          and(
+            eq(playerRatingHistoryTable.accountId, accountId),
+            eq(playerRatingHistoryTable.mode, mode),
+            eq(playerRatingHistoryTable.isFlagged, false),
+            cursor
+          )
+        )
+        .orderBy(asc(playerRatingHistoryTable.cotdDate), asc(playerRatingHistoryTable.id))
+        .limit(PAGE_SIZE);
+
+      accountHistory.push(...page.map(({ id: _id, ...row }) => row));
+      if (page.length < PAGE_SIZE) break;
+
+      lastDate = page[page.length - 1].cotdDate;
+      lastId = page[page.length - 1].id;
+    }
+    return accountHistory;
+  };
+
+  const workers = Array.from({ length: Math.min(4, uniqueAccountIds.length) }, async () => {
+    while (nextAccountIndex < uniqueAccountIds.length) {
+      const accountIndex = nextAccountIndex++;
+      histories[accountIndex] = await loadAccountHistory(uniqueAccountIds[accountIndex]);
+    }
+  });
+  await Promise.all(workers);
+
+  return histories.flat().sort((a, b) => a.cotdDate.localeCompare(b.cotdDate));
 }

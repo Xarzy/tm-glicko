@@ -147,10 +147,19 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   // Group history by player
   const playerSeries: PlayerData[] = [];
+  const historyByAccount = new Map<string, typeof historyRows>();
+  for (const row of historyRows) {
+    const playerRows = historyByAccount.get(row.accountId);
+    if (playerRows) {
+      playerRows.push(row);
+    } else {
+      historyByAccount.set(row.accountId, [row]);
+    }
+  }
   let colorIdx = 0;
 
   for (const p of foundPlayers) {
-    const playerRows = historyRows.filter(r => r.accountId === p.accountId && !r.isFlagged);
+    const playerRows = historyByAccount.get(p.accountId) ?? [];
     if (playerRows.length === 0) continue;
 
     const points = playerRows.map(r => ({
@@ -333,21 +342,21 @@ function renderRatingChartWithRankZones(
   series.forEach((s) => {
     if (s.points.length === 0) return;
 
-    let pathD = '';
+    const pathCommands: string[] = [];
     for (let i = 0; i < s.points.length; i++) {
       const pt = s.points[i];
       const x = getX(pt.time);
       const y = getY(pt.rating);
 
       if (i === 0) {
-        pathD += `M ${x.toFixed(2)} ${y.toFixed(2)}`;
+        pathCommands.push(`M ${x.toFixed(2)} ${y.toFixed(2)}`);
       } else {
-        pathD += ` H ${x.toFixed(2)} V ${y.toFixed(2)}`;
+        pathCommands.push(`H ${x.toFixed(2)} V ${y.toFixed(2)}`);
       }
     }
 
     linesSvg += `
-      <path d="${pathD}" fill="none" stroke="${s.color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="${pathCommands.join(' ')}" fill="none" stroke="${s.color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
     `;
 
     const lastPt = s.points[s.points.length - 1];
