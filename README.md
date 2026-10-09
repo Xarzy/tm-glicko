@@ -75,6 +75,21 @@ GitHub Actions runs the test suite and TypeScript type-check on pushes and pull
 requests. Dependabot checks weekly for Bun dependency and GitHub Actions
 updates.
 
+On a Linux host with Bash, GNU `date`, and Bun installed, start the daily
+19:30 Europe/Berlin update scheduler from the project root:
+
+```bash
+bash scripts/schedule-daily-update.sh start
+```
+
+The scheduler runs in the background and writes job output and run status to
+`logs/daily-update.log`. Europe/Berlin time automatically follows CET/CEST
+daylight-saving changes. Stop it with:
+
+```bash
+bash scripts/schedule-daily-update.sh stop
+```
+
 ## Commands
 
 The bot registers slash commands from `src/commands/`:

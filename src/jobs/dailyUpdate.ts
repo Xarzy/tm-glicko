@@ -12,3 +12,10 @@ export async function runDailyUpdate() {
   }
   console.log(`[daily] processed ${total} day(s)`);
 }
+
+if (import.meta.main) {
+  runDailyUpdate().catch((error: unknown) => {
+    console.error('[daily] update failed:', error);
+    process.exitCode = 1;
+  });
+}
