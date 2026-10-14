@@ -21,9 +21,6 @@ export function leaderboardScore(rating: number, rd: number): number {
   return rating - rd * LEADERBOARD_CONFIDENCE_MULTIPLIER;
 }
 
-export const leaderboardScoreSql = () =>
-  sql`${playerRatingStateTable.rating} - ${playerRatingStateTable.rd} * ${LEADERBOARD_CONFIDENCE_MULTIPLIER}`;
-
 const libsqlUrl = process.env.LIBSQL_URL;
 if (libsqlUrl && !/^(libsql|https?):\/\//i.test(libsqlUrl)) {
   throw new Error('LIBSQL_URL must use the libsql://, https://, or http:// protocol.');
@@ -94,10 +91,8 @@ export async function getRatingRank(
   mode: RatingMode,
   accountId: string,
   rating: number,
-  rd: number,
 ): Promise<{ rank: number; total: number }> {
   try {
-    const score = leaderboardScore(rating, rd);
     const result = await db.get<{ ahead: number; total: number }>(sql`SELECT
       (
         SELECT count(*)
@@ -105,11 +100,9 @@ export async function getRatingRank(
         WHERE ${playerRatingStateTable.mode} = ${mode}
           AND ${playerRatingStateTable.lastProcessedCupId} IS NOT NULL
           AND (
-            ${leaderboardScoreSql()} > ${score}
-            OR (${leaderboardScoreSql()} = ${score} AND ${playerRatingStateTable.rating} > ${rating})
+            ${playerRatingStateTable.rating} > ${rating}
             OR (
-              ${leaderboardScoreSql()} = ${score}
-              AND ${playerRatingStateTable.rating} = ${rating}
+              ${playerRatingStateTable.rating} = ${rating}
               AND ${playerRatingStateTable.accountId} < ${accountId}
             )
           )
@@ -148,7 +141,6 @@ export async function getPlayerRatingStateByRank(
     const row = await db.query.playerRatingStateTable.findFirst({
       where: and(eq(playerRatingStateTable.mode, mode), isNotNull(playerRatingStateTable.lastProcessedCupId)),
       orderBy: [
-        sql`${leaderboardScoreSql()} DESC`,
         sql`${playerRatingStateTable.rating} DESC`,
         asc(playerRatingStateTable.accountId),
       ],
@@ -196,7 +188,6 @@ export async function getPlayerRatingStatesByRankRange(
       )
     )
     .orderBy(
-      sql`${leaderboardScoreSql()} DESC`,
       sql`${playerRatingStateTable.rating} DESC`,
       asc(playerRatingStateTable.accountId),
     )

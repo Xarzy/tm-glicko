@@ -123,14 +123,11 @@ it without implausible rating changes. A large fall is still possible after a
 result that is surprising for the player's rating deviation and the field they
 faced.
 
-Leaderboard rank, percentile tier, and graph rank-zone cutoffs use the same
-confidence-adjusted ordering:
-
-`rating - 0.5 × RD`
-
-Commands continue to display raw rating and RD separately. RD expands when a
-player returns after inactivity, then decreases again when informative results
-are recorded.
+Leaderboard rank, percentile tier, and graph rank-zone cutoffs are ordered by
+raw rating, highest first. Players with identical ratings are ordered by account
+ID. Commands display the raw rating and RD separately; RD expands when a player
+returns after inactivity, then decreases again when informative results are
+recorded.
 
 ## Useful maintenance scripts
 

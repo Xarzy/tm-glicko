@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, AttachmentBuilder } from 'discord.js';
 import { findAccountIdByUsername } from '../services/accountLookup';
-import { getPlayerRatingState, getRatingRank, getCotdDayById, leaderboardScore } from '../db';
+import { getPlayerRatingState, getRatingRank, getCotdDayById } from '../db';
 import { getPlayerTier } from '../services/rankService';
 import { getUncertaintyCategory } from '../services/ratingPresentation';
 import { join } from 'node:path';
@@ -33,11 +33,11 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   }
 
   const [rankResult, lastCup] = await Promise.all([
-    getRatingRank('qualifying', state.accountId, state.rating, state.rd),
+    getRatingRank('qualifying', state.accountId, state.rating),
     state.lastProcessedCupId === null ? Promise.resolve(null) : getCotdDayById(state.lastProcessedCupId),
   ]);
   const { rank, total } = rankResult;
-  const tierInfo = await getPlayerTier(leaderboardScore(state.rating, state.rd), rank, total);
+  const tierInfo = await getPlayerTier(state.rating, rank, total);
 
   const ratingChange =
     state.previousRating !== null

@@ -1,4 +1,4 @@
-import { db, leaderboardScoreSql } from '../db';
+<import { db } from '../db';
 import { playerRatingStateTable } from '../db/schema';
 import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 
@@ -79,11 +79,10 @@ export interface RankThresholdBand {
 }
 
 interface ActiveRating {
-  score: number;
   rating: number;
 }
 
-// In-memory cache of score-ordered players to avoid heavy database queries on every slash command.
+// In-memory cache of rating-ordered players to avoid heavy database queries on every slash command.
 let cachedCutoffs: { timestamp: number; players: ActiveRating[] } | null = null;
 let cachedRankBands: { timestamp: number; bands: RankThresholdBand[] } | null = null;
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -95,7 +94,7 @@ async function getActivePlayers(): Promise<ActiveRating[]> {
   }
 
   const rows = await db
-    .select({ score: sql<number>`${leaderboardScoreSql()}`.as('score'), rating: playerRatingStateTable.rating })
+    .select({ rating: playerRatingStateTable.rating })
     .from(playerRatingStateTable)
     .where(
       and(
@@ -104,7 +103,6 @@ async function getActivePlayers(): Promise<ActiveRating[]> {
       )
     )
     .orderBy(
-      sql`${leaderboardScoreSql()} DESC`,
       sql`${playerRatingStateTable.rating} DESC`,
       sql`${playerRatingStateTable.accountId} ASC`,
     );
@@ -126,7 +124,7 @@ export function invalidateRankThresholdCache(): void {
  * in the active player database.
  */
 export async function getPlayerTier(
-  playerScore: number,
+  playerRating: number,
   playerRankIndex?: number,
   totalPlayersCount?: number
 ): Promise<PlayerRankTierInfo> {
@@ -152,10 +150,10 @@ export async function getPlayerTier(
   if (playerRankIndex !== undefined) {
     percentile = (playerRankIndex - 1) / total;
   } else {
-    // Find rank by the same confidence-adjusted score used by the leaderboard.
+    // Find rank by the same raw-rating ordering used by the leaderboard.
     let rankPos = 1;
     for (const player of players) {
-      if (player.score > playerScore) rankPos++;
+      if (player.rating > playerRating) rankPos++;
       else break;
     }
     percentile = (rankPos - 1) / total;
@@ -251,8 +249,7 @@ export async function getRankThresholdBands(): Promise<RankThresholdBand[]> {
   const rankedPlayers = db.$with('ranked_players').as(
     db.select({
       rankIndex: sql<number>`row_number() over (
-        order by ${leaderboardScoreSql()} desc,
-          ${playerRatingStateTable.rating} desc,
+        order by ${playerRatingStateTable.rating} desc,
           ${playerRatingStateTable.accountId} asc
       ) - 1`.as('rank_index'),
       rating: playerRatingStateTable.rating,
