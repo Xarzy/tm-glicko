@@ -83,6 +83,13 @@ export interface RankThresholdBand {
   maxRating: number;
 }
 
+export function formatTopPercentage(topPercentage: number): string {
+  const options: Intl.NumberFormatOptions = topPercentage < 1
+    ? { maximumSignificantDigits: 1 }
+    : { maximumFractionDigits: 2 };
+  return new Intl.NumberFormat('en-US', options).format(topPercentage);
+}
+
 interface ActiveRating {
   rating: number;
 }
@@ -152,7 +159,9 @@ export async function getPlayerTier(
 
   // 1. Calculate player's top percentile (0 = top player, 1 = bottom player)
   let percentile: number;
+  let rankPosition: number;
   if (playerRankIndex !== undefined) {
+    rankPosition = playerRankIndex;
     percentile = (playerRankIndex - 1) / total;
   } else {
     // Find rank by the same raw-rating ordering used by the leaderboard.
@@ -161,11 +170,12 @@ export async function getPlayerTier(
       if (player.rating > playerRating) rankPos++;
       else break;
     }
+    rankPosition = rankPos;
     percentile = (rankPos - 1) / total;
   }
 
   percentile = Math.max(0, Math.min(0.9999, percentile));
-  const topPercentage = +(percentile * 100).toFixed(2);
+  const topPercentage = (rankPosition / total) * 100;
 
   // 2. Identify the Rank
   let currentRank = RL_RANKS[RL_RANKS.length - 1];

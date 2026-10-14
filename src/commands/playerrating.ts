@@ -1,7 +1,7 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, AttachmentBuilder } from 'discord.js';
-import { findAccountIdByUsername } from '../services/accountLookup';
-import { getPlayerRatingState, getPlayerRatingStateByRank, getRatingRank, getCotdDayById } from '../db';
-import { getNextRankGoal, getPlayerTier } from '../services/rankService';
+import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, AttachmentBuilder, escapeMarkdown } from 'discord.js';
+import { findAccountIdByUsername, findUsernameByAccountId, findUsernamesByAccountIds } from '../services/accountLookup';
+import { getPlayerRatingState, getPlayerRatingStateByRank, getPlayerRatingStatesByRankRange, getRatingRank, getCotdDayById } from '../db';
+import { formatTopPercentage, getNextRankGoal, getPlayerTier } from '../services/rankService';
 import { getUncertaintyCategory } from '../services/ratingPresentation';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -37,6 +37,23 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     state.lastProcessedCupId === null ? Promise.resolve(null) : getCotdDayById(state.lastProcessedCupId),
   ]);
   const { rank, total } = rankResult;
+  const closestPlayersFrom = Math.max(1, Math.min(rank - 2, total - 4));
+  const closestPlayersTo = Math.min(total, closestPlayersFrom + 4);
+  const { states: closestPlayerStates } = await getPlayerRatingStatesByRankRange(
+    'qualifying',
+    closestPlayersFrom,
+    closestPlayersTo - closestPlayersFrom + 1,
+  );
+  const closestPlayerUsernames = await findUsernamesByAccountIds(
+    closestPlayerStates.filter((_, index) => closestPlayersFrom + index !== rank).map(player => player.accountId),
+  );
+  const closestPlayers = closestPlayerStates
+    .map((player, index) => ({ player, rank: closestPlayersFrom + index }))
+    .filter(({ rank: playerRank }) => playerRank !== rank)
+    .map(({ player, rank: playerRank }) =>
+      `**#${playerRank}** ${escapeMarkdown(closestPlayerUsernames.get(player.accountId) ?? player.accountId)}`
+    )
+    .join(', ');
   const tierInfo = await getPlayerTier(state.rating, rank, total);
   const nextGoal = getNextRankGoal(rank, total, tierInfo);
   const nextGoalState = nextGoal
@@ -45,6 +62,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   if (nextGoal && !nextGoalState) {
     throw new Error(`Could not load the player at next-goal leaderboard position ${nextGoal.rank}.`);
   }
+  const nextGoalUsername = nextGoal?.name.startsWith('Top ') && nextGoalState
+    ? (await findUsernameByAccountId(nextGoalState.state.accountId)) ?? nextGoalState.state.accountId
+    : null;
 
   const ratingChange =
     state.previousRating !== null
@@ -65,7 +85,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   const nextGoalField = nextGoal && nextGoalState
     ? {
       name: 'Next Goal',
-      value: `**${nextGoal.name}**\nRating: ${Math.round(nextGoalState.state.rating)} (${nextGoalState.state.rating >= state.rating ? '+' : ''}${(nextGoalState.state.rating - state.rating).toFixed(1)} to go)`,
+      value: `**${nextGoal.name}${nextGoalUsername ? ` — ${nextGoalUsername}` : ''}**\nRating: ${Math.round(nextGoalState.state.rating)} (${nextGoalState.state.rating >= state.rating ? '+' : ''}${(nextGoalState.state.rating - state.rating).toFixed(1)} to go)`,
       inline: false,
     }
     : null;
@@ -76,7 +96,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     .addFields(
       {
         name: 'Competitive Rank',
-        value: `**${tierInfo.fullName}** (Top ${tierInfo.topPercentage}%)`,
+        value: `**${tierInfo.fullName}** (Top ${formatTopPercentage(tierInfo.topPercentage)}%)`,
         inline: false,
       },
       ...(nextGoalField ? [nextGoalField] : []),
@@ -89,6 +109,11 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         name: 'Leaderboard Rank',
         value: `#${rank} of ${total}`,
         inline: true,
+      },
+      {
+        name: 'Closest Players',
+        value: closestPlayers || 'No other players on the leaderboard.',
+        inline: false,
       },
       {
         name: 'Match Count',
