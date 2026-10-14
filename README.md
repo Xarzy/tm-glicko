@@ -52,7 +52,7 @@ bun install
 ```env
 DISCORD_BOT_TOKEN=your_discord_bot_token
 DISCORD_BOT_CLIENT_ID=your_discord_application_id
-DISCORD_GUILD_ID=optional_test_guild_id
+DISCORD_GUILD_IDS=optional_test_guild_id,another_test_guild_id
 DB_FILE_NAME=local.db
 # Optional: set these to use a hosted LibSQL database instead of local SQLite.
 LIBSQL_URL=
@@ -62,6 +62,11 @@ TRACKMANIA_OAUTH_CLIENT_SECRET=your_trackmania_oauth_client_secret
 NADEO_SERVER_LOGIN=your_nadeo_login
 NADEO_SERVER_PASSWORD=your_nadeo_password
 ```
+
+`DISCORD_GUILD_IDS` is optional and accepts comma-separated guild IDs for
+instant command registration in multiple servers. `DISCORD_GUILD_ID` remains
+supported for existing single-server configurations. If neither is set,
+commands are registered globally.
 
 3. Start the bot:
 

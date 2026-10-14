@@ -41,15 +41,35 @@ for (const file of commandFiles) {
 async function registerCommands() {
   const token = process.env.DISCORD_BOT_TOKEN!;
   const clientId = process.env.DISCORD_BOT_CLIENT_ID!;
-  const guildId = process.env.DISCORD_GUILD_ID; // optional — set during dev for instant registration to one server
+  const configuredGuildIds = process.env.DISCORD_GUILD_IDS ?? process.env.DISCORD_GUILD_ID;
+  const guildIds = configuredGuildIds
+    ?.split(',')
+    .map(guildId => guildId.trim())
+    .filter(Boolean);
 
   const rest = new REST().setToken(token);
   const body = commands.map(c => c.data.toJSON());
 
   try {
-    if (guildId) {
-      await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body });
-      console.log(`[commands] registered ${body.length} command(s) to guild ${guildId}`);
+    if (guildIds?.length) {
+      if (guildIds.some(guildId => !/^\d+$/.test(guildId))) {
+        throw new Error('DISCORD_GUILD_IDS must contain comma-separated numeric guild IDs.');
+      }
+
+      const uniqueGuildIds = [...new Set(guildIds)];
+      const results = await Promise.allSettled(
+        uniqueGuildIds.map(guildId =>
+          rest.put(Routes.applicationGuildCommands(clientId, guildId), { body })
+        )
+      );
+      results.forEach((result, index) => {
+        const guildId = uniqueGuildIds[index];
+        if (result.status === 'fulfilled') {
+          console.log(`[commands] registered ${body.length} command(s) to guild ${guildId}`);
+        } else {
+          console.error(`[commands] registration failed for guild ${guildId}:`, result.reason);
+        }
+      });
     } else {
       await rest.put(Routes.applicationCommands(clientId), { body });
       console.log(`[commands] registered ${body.length} command(s) globally (can take up to 1hr to propagate)`);
