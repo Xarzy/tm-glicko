@@ -106,6 +106,9 @@ The bot registers slash commands from `src/commands/`:
 4. Rating state and history are stored in SQLite.
 5. Discord commands read from that database and render formatted results.
 
+Database operations automatically retry up to five times after the initial
+attempt, using exponential backoff; the final failure is logged and rethrown.
+
 ## Rating model
 
 Qualifying is rated as one calibrated Glicko-2 tournament period. The

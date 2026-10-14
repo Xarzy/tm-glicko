@@ -1,6 +1,7 @@
-import { createClient } from '@libsql/client';
+import { createClient, type Transaction } from '@libsql/client';
 import { drizzle } from 'drizzle-orm/libsql';
 import { inArray, isNotNull, isNull, asc, sql, eq, and, or, gt } from 'drizzle-orm';
+import { retryDatabaseCall } from './retry';
 import * as schema from './schema';
 import {
   cotdDaysTable,
@@ -32,11 +33,48 @@ const client = createClient({
   ...(authToken ? { authToken } : {}),
 });
 
-if (!libsqlUrl) {
-  await client.execute('PRAGMA journal_mode = WAL;');
+const retryableClientMethods = new Set([
+  'execute',
+  'batch',
+  'migrate',
+  'executeMultiple',
+  'sync',
+  'commit',
+  'rollback',
+]);
+
+function withDatabaseRetries<T extends object>(target: T, operationPrefix: string): T {
+  return new Proxy(target, {
+    get(clientTarget, property) {
+      const method = Reflect.get(clientTarget, property, clientTarget);
+      if (typeof method !== 'function') return method;
+
+      const operationName = `${operationPrefix}.${String(property)}`;
+      if (property === 'transaction') {
+        return (...args: unknown[]) =>
+          retryDatabaseCall(operationName, async () => {
+            const transaction = await Reflect.apply(method, clientTarget, args) as Transaction;
+            return withDatabaseRetries(transaction, 'transaction');
+          });
+      }
+
+      if (retryableClientMethods.has(String(property))) {
+        return (...args: unknown[]) =>
+          retryDatabaseCall(operationName, () => Reflect.apply(method, clientTarget, args));
+      }
+
+      return method.bind(clientTarget);
+    },
+  });
 }
 
-export const db = drizzle(client, { schema });
+const retryingClient = withDatabaseRetries(client, 'client');
+
+if (!libsqlUrl) {
+  await retryingClient.execute('PRAGMA journal_mode = WAL;');
+}
+
+export const db = drizzle(retryingClient, { schema });
 const CHUNK_SIZE = 1000;
 
 const DEFAULT_STATE: Omit<SelectPlayerRatingState, 'accountId' | 'mode' | 'updatedAt'> = {
