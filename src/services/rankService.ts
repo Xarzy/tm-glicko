@@ -1,4 +1,4 @@
-<import { db } from '../db';
+import { db } from '../db';
 import { playerRatingStateTable } from '../db/schema';
 import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 
