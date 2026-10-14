@@ -1,7 +1,7 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, AttachmentBuilder, escapeMarkdown } from 'discord.js';
 import { findUsernameByAccountId, findUsernamesByAccountIds } from '../services/accountLookup';
 import { getPlayerRatingStateByRank, getPlayerRatingStatesByRankRange, getCotdDayById } from '../db';
-import { formatTopPercentage, getNextRankGoal, getPlayerTier } from '../services/rankService';
+import { formatTopPercentage, getCotdDivisionEstimate, getNextRankGoal, getPlayerTier } from '../services/rankService';
 import { getUncertaintyCategory } from '../services/ratingPresentation';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -54,6 +54,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   // Resolve player username from account ID
   const username = (await findUsernameByAccountId(state.accountId)) ?? state.accountId;
   const tierInfo = await getPlayerTier(state.rating, rank, total);
+  const divisionEstimate = await getCotdDivisionEstimate(state.rating);
   const nextGoal = getNextRankGoal(rank, total, tierInfo);
   const nextGoalState = nextGoal
     ? await getPlayerRatingStateByRank('qualifying', nextGoal.rank)
@@ -97,6 +98,13 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       {
         name: 'Competitive Rank',
         value: `**${tierInfo.fullName}** (Top ${formatTopPercentage(tierInfo.topPercentage)}%)`,
+        inline: false,
+      },
+      {
+        name: 'COTD Division Estimate',
+        value: divisionEstimate === null
+          ? 'Unavailable: no historical COTD results found.'
+          : `Div **${divisionEstimate}**`,
         inline: false,
       },
       ...(nextGoalField ? [nextGoalField] : []),

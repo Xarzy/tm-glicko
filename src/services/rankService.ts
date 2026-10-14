@@ -1,6 +1,7 @@
-import { db } from '../db';
+import { db, getRecentCotdDivisionSamples } from '../db';
 import { playerRatingStateTable } from '../db/schema';
 import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { estimateCotdDivision } from './cotdDivisionEstimate';
 
 export interface RankDefinition {
   code: string;       // e.g. 'ssl', 'gc3', 'd1'
@@ -97,6 +98,10 @@ interface ActiveRating {
 // In-memory cache of rating-ordered players to avoid heavy database queries on every slash command.
 let cachedCutoffs: { timestamp: number; players: ActiveRating[] } | null = null;
 let cachedRankBands: { timestamp: number; bands: RankThresholdBand[] } | null = null;
+let cachedCotdDivisionSamples: {
+  timestamp: number;
+  samples: Awaited<ReturnType<typeof getRecentCotdDivisionSamples>>;
+} | null = null;
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 async function getActivePlayers(): Promise<ActiveRating[]> {
@@ -129,6 +134,19 @@ async function getActivePlayers(): Promise<ActiveRating[]> {
 export function invalidateRankThresholdCache(): void {
   cachedCutoffs = null;
   cachedRankBands = null;
+  cachedCotdDivisionSamples = null;
+}
+
+export async function getCotdDivisionEstimate(rating: number): Promise<number | null> {
+  const now = Date.now();
+  if (!cachedCotdDivisionSamples || now - cachedCotdDivisionSamples.timestamp >= CACHE_TTL_MS) {
+    cachedCotdDivisionSamples = {
+      timestamp: now,
+      samples: await getRecentCotdDivisionSamples(),
+    };
+  }
+
+  return estimateCotdDivision(rating, cachedCotdDivisionSamples.samples);
 }
 
 /**

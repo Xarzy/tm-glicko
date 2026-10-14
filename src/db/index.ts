@@ -238,6 +238,48 @@ export async function getPlayerRatingStatesByRankRange(
   };
 }
 
+export async function getRecentCotdDivisionSamples(cupLimit = 30): Promise<
+  { rating: number; rank: number; fieldSize: number }[]
+> {
+  if (!Number.isInteger(cupLimit) || cupLimit < 1) {
+    throw new Error('COTD history limit must be a positive integer.');
+  }
+
+  const cups = await db
+    .select({
+      cupId: cotdDaysTable.cupId,
+      fieldSize: cotdDaysTable.cardinal,
+    })
+    .from(cotdDaysTable)
+    .where(and(isNotNull(cotdDaysTable.cardinal), gt(cotdDaysTable.cardinal, 0), isNotNull(cotdDaysTable.processedAt)))
+    .orderBy(sql`${cotdDaysTable.startDate} DESC`)
+    .limit(cupLimit);
+
+  if (cups.length === 0) return [];
+
+  const fieldSizeByCup = new Map(cups.map(cup => [cup.cupId, cup.fieldSize!]));
+  const historyRows = await db
+    .select({
+      cupId: playerRatingHistoryTable.cupId,
+      rating: playerRatingHistoryTable.rating,
+      rank: playerRatingHistoryTable.rank,
+    })
+    .from(playerRatingHistoryTable)
+    .where(and(
+      eq(playerRatingHistoryTable.mode, 'qualifying'),
+      eq(playerRatingHistoryTable.isFlagged, false),
+      isNotNull(playerRatingHistoryTable.rank),
+      inArray(playerRatingHistoryTable.cupId, cups.map(cup => cup.cupId)),
+    ));
+
+  return historyRows.flatMap(row => {
+    const fieldSize = fieldSizeByCup.get(row.cupId);
+    return fieldSize && row.rank !== null
+      ? [{ rating: row.rating, rank: row.rank, fieldSize }]
+      : [];
+  });
+}
+
 export async function insertCotdDaysIfNew(days: InsertCotdDay[]) {
   if (days.length === 0) return;
   await db.insert(cotdDaysTable).values(days).onConflictDoNothing();
