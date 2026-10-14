@@ -72,6 +72,11 @@ export interface PlayerRankTierInfo {
   iconPath: string; // Path to image file in images/
 }
 
+export interface NextRankGoal {
+  name: string;
+  rank: number;
+}
+
 export interface RankThresholdBand {
   rank: RankDefinition;
   minRating: number;
@@ -206,6 +211,51 @@ export async function getPlayerTier(
     topPercentage,
     fullName: `${currentRank.name} Division ${divisionRoman}`,
     iconPath: `images/${currentRank.iconFile}`,
+  };
+}
+
+export function getNextRankGoal(
+  rank: number,
+  total: number,
+  tierInfo: PlayerRankTierInfo,
+): NextRankGoal | null {
+  if (tierInfo.rank.code === 'ssl') {
+    if (rank === 1) return null;
+
+    const goalRank = rank <= 10 ? rank - 1 : Math.floor((rank - 1) / 10) * 10;
+    return {
+      name: rank <= 10 ? `Next player (#${goalRank})` : `Top ${goalRank}`,
+      rank: goalRank,
+    };
+  }
+
+  const rankIndex = RL_RANKS.findIndex(rankDefinition => rankDefinition.code === tierInfo.rank.code);
+  if (rankIndex < 0) {
+    throw new Error(`Unknown competitive rank: ${tierInfo.rank.code}`);
+  }
+
+  const upperPercentBound = rankIndex > 0 ? RL_RANKS[rankIndex - 1].topPercent : 0;
+  const lowerPercentBound = tierInfo.rank.topPercent;
+  const rankWidth = lowerPercentBound - upperPercentBound;
+
+  if (tierInfo.division < 4) {
+    const nextDivision = tierInfo.division + 1;
+    const goalPercentile = lowerPercentBound - (rankWidth * tierInfo.division) / 4;
+    const romans = ['I', 'II', 'III', 'IV'];
+    return {
+      name: `${tierInfo.rank.name} Division ${romans[nextDivision - 1]}`,
+      rank: Math.floor(goalPercentile * total) + 1,
+    };
+  }
+
+  const nextRank = RL_RANKS[rankIndex - 1];
+  if (!nextRank) {
+    throw new Error(`No higher rank exists above ${tierInfo.rank.name}.`);
+  }
+
+  return {
+    name: nextRank.name,
+    rank: Math.floor(upperPercentBound * total) + 1,
   };
 }
 

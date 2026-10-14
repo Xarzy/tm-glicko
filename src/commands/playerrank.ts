@@ -1,7 +1,7 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, AttachmentBuilder } from 'discord.js';
 import { findUsernameByAccountId } from '../services/accountLookup';
 import { getPlayerRatingStateByRank, getCotdDayById } from '../db';
-import { getPlayerTier } from '../services/rankService';
+import { getNextRankGoal, getPlayerTier } from '../services/rankService';
 import { getUncertaintyCategory } from '../services/ratingPresentation';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -37,6 +37,13 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   // Resolve player username from account ID
   const username = (await findUsernameByAccountId(state.accountId)) ?? state.accountId;
   const tierInfo = await getPlayerTier(state.rating, rank, total);
+  const nextGoal = getNextRankGoal(rank, total, tierInfo);
+  const nextGoalState = nextGoal
+    ? await getPlayerRatingStateByRank('qualifying', nextGoal.rank)
+    : null;
+  if (nextGoal && !nextGoalState) {
+    throw new Error(`Could not load the player at next-goal leaderboard position ${nextGoal.rank}.`);
+  }
 
   const ratingChange =
     state.previousRating !== null ? state.rating - state.previousRating : null;
@@ -55,6 +62,13 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       : 'n/a';
 
   const uncertaintyDesc = `${getUncertaintyCategory(state.rd)} ( ${Math.round(state.rd)} )`;
+  const nextGoalField = nextGoal && nextGoalState
+    ? {
+      name: 'Next Goal',
+      value: `**${nextGoal.name}**\nRating: ${Math.round(nextGoalState.state.rating)} (${nextGoalState.state.rating >= state.rating ? '+' : ''}${(nextGoalState.state.rating - state.rating).toFixed(1)} to go)`,
+      inline: false,
+    }
+    : null;
 
   const embed = new EmbedBuilder()
     .setColor(tierInfo.rank.tierColor)
@@ -65,6 +79,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         value: `**${tierInfo.fullName}** (Top ${tierInfo.topPercentage}%)`,
         inline: false,
       },
+      ...(nextGoalField ? [nextGoalField] : []),
       {
         name: 'Glicko-2 Rating',
         value: `${Math.round(state.rating)}`,
