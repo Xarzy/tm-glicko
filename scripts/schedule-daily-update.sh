@@ -18,7 +18,7 @@ run_scheduler() {
 
   while true; do
     now="$(TZ="$SCHEDULE_TZ" date +%s)"
-    next_run="$(TZ="$SCHEDULE_TZ" date -d 'today 14:56' +%s)"
+    next_run="$(TZ="$SCHEDULE_TZ" date -d 'today 19:30' +%s)"
     if (( next_run <= now )); then
       next_run="$(TZ="$SCHEDULE_TZ" date -d 'tomorrow 19:30' +%s)"
     fi
