@@ -11,6 +11,7 @@ import {
   isLikelyAbandonedQualifyingRun,
   prepareQualifyingState,
   QUALIFYING_RATING_CONFIG,
+  updateEligiblePeakRating,
 } from '../src/services/glickoService';
 
 const TARGET_ACCOUNTS = [
@@ -123,7 +124,7 @@ async function main() {
         rd: updated.rd,
         vol: updated.vol,
         matchCount: state.matchCount + 1,
-        peakRating: Math.max(state.peakRating, updated.rating),
+        peakRating: updateEligiblePeakRating(state.peakRating, updated.rating, state.matchCount),
         previousRating: state.rating,
         lastProcessedCupId: cup.cupId,
         lastRatedAt: ratedAt,

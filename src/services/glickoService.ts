@@ -1,5 +1,20 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { advanceGlickoRd, updateGlicko2, type GlickoOpponent } from './glicko2Math';
+import { MIN_RANKED_COTDS } from '../db/schema';
+
+export function updateEligiblePeakRating(
+  previousPeakRating: number,
+  currentRating: number,
+  previousMatchCount: number,
+): number {
+  if (previousMatchCount + 1 === MIN_RANKED_COTDS) {
+    return currentRating;
+  }
+
+  return previousMatchCount >= MIN_RANKED_COTDS
+    ? Math.max(previousPeakRating, currentRating)
+    : previousPeakRating;
+}
 
 /**
  * These values calibrate one COTD qualifying leaderboard as one Glicko-2
@@ -298,4 +313,3 @@ export function applyQualifyingCupResult(
 
   return updateGlicko2(state.rating, state.rd, state.vol, matches, config.tau);
 }
-

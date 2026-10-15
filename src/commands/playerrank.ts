@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, AttachmentBuilder, escapeMarkdown } from 'discord.js';
 import { findUsernameByAccountId, findUsernamesByAccountIds } from '../services/accountLookup';
-import { getPlayerRatingStateByRank, getPlayerRatingStatesByRankRange, getCotdDayById } from '../db';
+import { getEligiblePeakRating, getPlayerRatingStateByRank, getPlayerRatingStatesByRankRange, getCotdDayById } from '../db';
 import { formatTopPercentage, getCotdDivisionEstimate, getNextRankGoal, getPlayerTier } from '../services/rankService';
 import { getUncertaintyCategory } from '../services/ratingPresentation';
 import { join } from 'node:path';
@@ -33,6 +33,10 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   }
 
   const { state, total } = result;
+  const peakRating = await getEligiblePeakRating(state.accountId, 'qualifying');
+  if (peakRating === null) {
+    throw new Error(`Could not load eligible-era peak rating for account ${state.accountId}.`);
+  }
   const closestPlayersFrom = Math.max(1, Math.min(rank - 2, total - 4));
   const closestPlayersTo = Math.min(total, closestPlayersFrom + 4);
   const { states: closestPlayerStates } = await getPlayerRatingStatesByRankRange(
@@ -135,7 +139,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       },
       {
         name: 'Peak Rating',
-        value: `${Math.round(state.peakRating)}`,
+        value: `${Math.round(peakRating)}`,
         inline: true,
       },
       {

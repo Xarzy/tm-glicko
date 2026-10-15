@@ -8,7 +8,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findAccountIdsByUsernames } from '../services/accountLookup';
-import { getRatingHistoryForAccounts } from '../db';
+import { getRatingHistoryForAccounts, getStatesForAccounts } from '../db';
+import { MIN_RANKED_COTDS } from '../db/schema';
 import { getRankThresholdBands, type RankThresholdBand } from '../services/rankService';
 
 const IMAGES_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../images');
@@ -134,13 +135,28 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  // 2. Fetch rating history for these accounts
-  const accountIds = foundPlayers.map(p => p.accountId);
+  // Only ranked players can have rating history displayed.
+  const playerStates = await getStatesForAccounts(foundPlayers.map(player => player.accountId));
+  const ineligiblePlayers = foundPlayers.filter(player =>
+    (playerStates.get(player.accountId)?.matchCount ?? 0) < MIN_RANKED_COTDS
+  );
+  const eligiblePlayers = foundPlayers.filter(player =>
+    (playerStates.get(player.accountId)?.matchCount ?? 0) >= MIN_RANKED_COTDS
+  );
+  if (eligiblePlayers.length === 0) {
+    await interaction.editReply(
+      `Rating stats are unavailable until players complete ${MIN_RANKED_COTDS} COTDs: ${ineligiblePlayers.map(player => `**${player.username}**`).join(', ')}.`
+    );
+    return;
+  }
+
+  // 2. Fetch rating history for eligible accounts
+  const accountIds = eligiblePlayers.map(p => p.accountId);
   const historyRows = await getRatingHistoryForAccounts(accountIds, 'qualifying');
 
   if (historyRows.length === 0) {
     await interaction.editReply(
-      `No COTD rating history found for: ${foundPlayers.map(p => `**${p.username}**`).join(', ')}. Try running the recalculation or waiting for cups to be processed.`
+      `No COTD rating history found for: ${eligiblePlayers.map(p => `**${p.username}**`).join(', ')}. Try running the recalculation or waiting for cups to be processed.`
     );
     return;
   }
@@ -158,7 +174,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   }
   let colorIdx = 0;
 
-  for (const p of foundPlayers) {
+  for (const p of eligiblePlayers) {
     const playerRows = historyByAccount.get(p.accountId) ?? [];
     if (playerRows.length === 0) continue;
 
@@ -204,8 +220,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   const attachment = new AttachmentBuilder(pngBuffer, { name: 'rating-history.png' });
 
   let replyText = '';
+  if (ineligiblePlayers.length > 0) {
+    replyText = `*(Rating stats unavailable until ${MIN_RANKED_COTDS} COTDs are completed: ${ineligiblePlayers.map(player => `**${player.username}**`).join(', ')})*`;
+  }
   if (notFound.length > 0) {
-    replyText = `*(Could not find: ${notFound.map(n => `\`${n}\``).join(', ')})*`;
+    const notFoundText = `*(Could not find: ${notFound.map(n => `\`${n}\``).join(', ')})*`;
+    replyText = replyText ? `${replyText}\n${notFoundText}` : notFoundText;
   }
 
   await interaction.editReply({

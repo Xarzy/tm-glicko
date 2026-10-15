@@ -1,6 +1,6 @@
 import { db, getRecentCotdDivisionSamples } from '../db';
-import { playerRatingStateTable } from '../db/schema';
-import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { MIN_RANKED_COTDS, playerRatingStateTable } from '../db/schema';
+import { and, eq, gte, inArray, isNotNull, sql } from 'drizzle-orm';
 import { estimateCotdDivision } from './cotdDivisionEstimate';
 
 export interface RankDefinition {
@@ -116,7 +116,8 @@ async function getActivePlayers(): Promise<ActiveRating[]> {
     .where(
       and(
         eq(playerRatingStateTable.mode, 'qualifying'),
-        isNotNull(playerRatingStateTable.lastProcessedCupId)
+        isNotNull(playerRatingStateTable.lastProcessedCupId),
+        gte(playerRatingStateTable.matchCount, MIN_RANKED_COTDS),
       )
     )
     .orderBy(
@@ -302,7 +303,8 @@ export async function getRankThresholdBands(): Promise<RankThresholdBand[]> {
     .where(
       and(
         eq(playerRatingStateTable.mode, 'qualifying'),
-        isNotNull(playerRatingStateTable.lastProcessedCupId)
+        isNotNull(playerRatingStateTable.lastProcessedCupId),
+        gte(playerRatingStateTable.matchCount, MIN_RANKED_COTDS),
       )
     );
   const totalPlayers = countResult?.count ?? 0;
@@ -336,7 +338,8 @@ export async function getRankThresholdBands(): Promise<RankThresholdBand[]> {
       .where(
         and(
           eq(playerRatingStateTable.mode, 'qualifying'),
-          isNotNull(playerRatingStateTable.lastProcessedCupId)
+          isNotNull(playerRatingStateTable.lastProcessedCupId),
+          gte(playerRatingStateTable.matchCount, MIN_RANKED_COTDS),
         )
       )
   );

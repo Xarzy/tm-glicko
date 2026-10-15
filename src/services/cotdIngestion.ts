@@ -5,6 +5,7 @@ import {
   isLikelyAbandonedQualifyingRun,
   prepareQualifyingState,
   QUALIFYING_RATING_CONFIG,
+  updateEligiblePeakRating,
 } from './glickoService.ts';
 import { invalidateRankThresholdCache } from './rankService';
 import {
@@ -234,7 +235,7 @@ async function processCotdDay(day: SelectCotdDay) {
       rd: updated.rd,
       vol: updated.vol,
       matchCount: state.matchCount + 1,
-      peakRating: Math.max(state.peakRating, updated.rating),
+      peakRating: updateEligiblePeakRating(state.peakRating, updated.rating, state.matchCount),
       previousRating: state.rating,
       lastProcessedCupId: day.cupId,
       lastRatedAt: ratedAt,

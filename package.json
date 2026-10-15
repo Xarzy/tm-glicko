@@ -1,10 +1,11 @@
 {
-  "name": "discord-wordle-bot-template",
+  "name": "tm-glicko",
   "module": "index.ts",
   "type": "module",
   "scripts": {
     "import-db": "bun run scripts/importLocalDatabase.ts",
-    "test": "bun test",
+    "test": "bun test --parallel",
+    "test:cov": "bun test --coverage --parallel",
     "typecheck": "bunx tsc --noEmit"
   },
   "devDependencies": {

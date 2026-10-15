@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, AttachmentBuilder, escapeMarkdown } from 'discord.js';
 import { findAccountIdByUsername, findUsernameByAccountId, findUsernamesByAccountIds } from '../services/accountLookup';
-import { getPlayerRatingState, getPlayerRatingStateByRank, getPlayerRatingStatesByRankRange, getRatingRank, getCotdDayById } from '../db';
+import { getEligiblePeakRating, getPlayerRatingState, getPlayerRatingStateByRank, getPlayerRatingStatesByRankRange, getRatingRank, getCotdDayById } from '../db';
+import { MIN_RANKED_COTDS } from '../db/schema';
 import { formatTopPercentage, getCotdDivisionEstimate, getNextRankGoal, getPlayerTier } from '../services/rankService';
 import { getUncertaintyCategory } from '../services/ratingPresentation';
 import { join } from 'node:path';
@@ -27,15 +28,21 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   }
 
   const state = await getPlayerRatingState(accountId, 'qualifying');
-  if (state.lastProcessedCupId === null) {
-    await interaction.editReply(`**${username}** hasn't appeared in any processed COTD data yet.`);
+  if (state.lastProcessedCupId === null || state.matchCount < MIN_RANKED_COTDS) {
+    await interaction.editReply(
+      `**${username}** is not ranked yet. Rating stats are unavailable until they complete ${MIN_RANKED_COTDS} COTDs.`
+    );
     return;
   }
 
-  const [rankResult, lastCup] = await Promise.all([
+  const [rankResult, lastCup, peakRating] = await Promise.all([
     getRatingRank('qualifying', state.accountId, state.rating),
     state.lastProcessedCupId === null ? Promise.resolve(null) : getCotdDayById(state.lastProcessedCupId),
+    getEligiblePeakRating(state.accountId, 'qualifying'),
   ]);
+  if (peakRating === null) {
+    throw new Error(`Could not load eligible-era peak rating for account ${state.accountId}.`);
+  }
   const { rank, total } = rankResult;
   const closestPlayersFrom = Math.max(1, Math.min(rank - 2, total - 4));
   const closestPlayersTo = Math.min(total, closestPlayersFrom + 4);
@@ -135,7 +142,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       },
       {
         name: 'Peak Rating',
-        value: `${Math.round(state.peakRating)}`,
+        value: `${Math.round(peakRating)}`,
         inline: true,
       },
       {

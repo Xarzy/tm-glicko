@@ -4,6 +4,7 @@ import {
   applyQualifyingCupResult,
   isLikelyAbandonedQualifyingRun,
   prepareQualifyingState,
+  updateEligiblePeakRating,
 } from '../src/services/glickoService';
 import { advanceGlickoRd } from '../src/services/glicko2Math';
 
@@ -14,6 +15,13 @@ test('an unrated elapsed-time state keeps its raw rating and volatility', () => 
   expect(prepared.rating).toBe(state.rating);
   expect(prepared.vol).toBe(state.vol);
   expect(prepared.rd).toBe(advanceGlickoRd(state.rd, state.vol, 2));
+});
+
+test('eligible-era peak rating starts at the tenth completed COTD', () => {
+  expect(updateEligiblePeakRating(2100, 1900, 8)).toBe(2100);
+  expect(updateEligiblePeakRating(2100, 1900, 9)).toBe(1900);
+  expect(updateEligiblePeakRating(1900, 1950, 10)).toBe(1950);
+  expect(updateEligiblePeakRating(1950, 1925, 11)).toBe(1950);
 });
 
 test('a qualifying result updates rating and keeps uncertainty in the valid range', () => {

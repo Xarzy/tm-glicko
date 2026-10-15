@@ -1,6 +1,6 @@
 import { createClient, type Transaction } from '@libsql/client';
 import { drizzle } from 'drizzle-orm/libsql';
-import { inArray, isNotNull, isNull, asc, sql, eq, and, or, gt } from 'drizzle-orm';
+import { inArray, isNotNull, isNull, asc, sql, eq, and, or, gt, gte } from 'drizzle-orm';
 import { retryDatabaseCall } from './retry';
 import * as schema from './schema';
 import {
@@ -14,6 +14,7 @@ import {
   type SelectCotdDay,
   type InsertChallengeLeaderboard,
   type InsertPlayerRatingHistory,
+  MIN_RANKED_COTDS,
 } from './schema.ts';
 
 export const LEADERBOARD_CONFIDENCE_MULTIPLIER = 0.5;
@@ -105,6 +106,27 @@ export async function getPlayerRatingState(
   }
 }
 
+export async function getEligiblePeakRating(accountId: string, mode: RatingMode): Promise<number | null> {
+  const result = await db.get<{ peakRating: number | null }>(sql`
+    WITH eligible_history AS (
+      SELECT
+        ${playerRatingHistoryTable.rating} AS rating,
+        row_number() OVER (
+          ORDER BY ${playerRatingHistoryTable.cotdDate} ASC, ${playerRatingHistoryTable.id} ASC
+        ) AS completed_cotds
+      FROM ${playerRatingHistoryTable}
+      WHERE ${playerRatingHistoryTable.accountId} = ${accountId}
+        AND ${playerRatingHistoryTable.mode} = ${mode}
+        AND ${playerRatingHistoryTable.isFlagged} = 0
+    )
+    SELECT max(rating) AS peakRating
+    FROM eligible_history
+    WHERE completed_cotds >= ${MIN_RANKED_COTDS}
+  `);
+
+  return result?.peakRating ?? null;
+}
+
 export async function upsertPlayerRatingState(
   accountId: string,
   mode: RatingMode,
@@ -137,6 +159,7 @@ export async function getRatingRank(
         FROM ${playerRatingStateTable}
         WHERE ${playerRatingStateTable.mode} = ${mode}
           AND ${playerRatingStateTable.lastProcessedCupId} IS NOT NULL
+          AND ${playerRatingStateTable.matchCount} >= ${MIN_RANKED_COTDS}
           AND (
             ${playerRatingStateTable.rating} > ${rating}
             OR (
@@ -150,6 +173,7 @@ export async function getRatingRank(
         FROM ${playerRatingStateTable}
         WHERE ${playerRatingStateTable.mode} = ${mode}
           AND ${playerRatingStateTable.lastProcessedCupId} IS NOT NULL
+          AND ${playerRatingStateTable.matchCount} >= ${MIN_RANKED_COTDS}
       ) AS total
     `);
 
@@ -171,13 +195,21 @@ export async function getPlayerRatingStateByRank(
     const totalResult = await db
       .select({ count: sql<number>`count(*)` })
       .from(playerRatingStateTable)
-      .where(and(eq(playerRatingStateTable.mode, mode), isNotNull(playerRatingStateTable.lastProcessedCupId)));
+      .where(and(
+        eq(playerRatingStateTable.mode, mode),
+        isNotNull(playerRatingStateTable.lastProcessedCupId),
+        gte(playerRatingStateTable.matchCount, MIN_RANKED_COTDS),
+      ));
 
     const total = totalResult[0]?.count ?? 0;
     if (rank < 1 || rank > total) return null;
 
     const row = await db.query.playerRatingStateTable.findFirst({
-      where: and(eq(playerRatingStateTable.mode, mode), isNotNull(playerRatingStateTable.lastProcessedCupId)),
+      where: and(
+        eq(playerRatingStateTable.mode, mode),
+        isNotNull(playerRatingStateTable.lastProcessedCupId),
+        gte(playerRatingStateTable.matchCount, MIN_RANKED_COTDS),
+      ),
       orderBy: [
         sql`${playerRatingStateTable.rating} DESC`,
         asc(playerRatingStateTable.accountId),
@@ -223,6 +255,7 @@ export async function getPlayerRatingStatesByRankRange(
       and(
         eq(playerRatingStateTable.mode, mode),
         isNotNull(playerRatingStateTable.lastProcessedCupId),
+        gte(playerRatingStateTable.matchCount, MIN_RANKED_COTDS),
       )
     )
     .orderBy(
@@ -480,6 +513,14 @@ export async function getRatingHistoryForAccounts(
           cupId: playerRatingHistoryTable.cupId,
         })
         .from(playerRatingHistoryTable)
+        .innerJoin(
+          playerRatingStateTable,
+          and(
+            eq(playerRatingStateTable.accountId, playerRatingHistoryTable.accountId),
+            eq(playerRatingStateTable.mode, mode),
+            gte(playerRatingStateTable.matchCount, MIN_RANKED_COTDS),
+          ),
+        )
         .where(
           and(
             eq(playerRatingHistoryTable.accountId, accountId),

@@ -1,3 +1,5 @@
+![alt](https://github.com/Xarzy/tm-glicko/actions/workflows/ci.yml/badge.svg)
+
 # TM Glicko
 
 TM Glicko is a Discord bot for Trackmania COTD ratings using a Glicko-2 style rating system. It ingests Cup of the Day data from Nadeo/Trackmania services, tracks leaderboard results, recalculates player ratings, and exposes rating lookups through Discord slash commands.
@@ -8,9 +10,15 @@ TM Glicko is a Discord bot for Trackmania COTD ratings using a Glicko-2 style ra
 - COTD qualifying leaderboard ingestion
 - Glicko-2 rating calculations and history tracking
 - Discord slash commands for rating, rank, and chart queries
+- Competitive ranking after at least 10 completed COTDs
 - SQLite persistence with Drizzle ORM
 - Daily automated ingestion/update jobs
 - Rating tier and percentile presentation for Discord embeds
+
+Players become eligible for competitive ranks and leaderboard placement after
+completing 10 COTDs. Until then, their rating stats are unavailable; leaderboard
+ranks and top-percent calculations include only eligible players. Peak rating
+tracks ratings from the player's 10th completed COTD onward.
 
 ## Project structure
 
@@ -81,7 +89,7 @@ requests. Dependabot checks weekly for Bun dependency and GitHub Actions
 updates.
 
 On a Linux host with Bash, GNU `date`, and Bun installed, start the daily
-19:30 Europe/Berlin update scheduler from the project root:
+19:30 Europe/Paris update scheduler from the project root:
 
 ```bash
 bash scripts/schedule-daily-update.sh start
@@ -122,14 +130,6 @@ with continuous placement outcomes: finishing ahead is always at least a draw,
 and finishing behind is always at most a draw. This avoids discontinuities from
 treating adjacent placements as a near-loss while keeping opponent rating and
 uncertainty relevant to every update.
-
-The rating is uncapped. The calibration objective is for the top 10 players to
-land between 2900 and 2920 with no more than 20 points between the highest and
-lowest of them. This is a replay-calibration target, not a ceiling or a display
-offset; it is not considered achieved until a historical replay demonstrates
-it without implausible rating changes. A large fall is still possible after a
-result that is surprising for the player's rating deviation and the field they
-faced.
 
 Leaderboard rank, percentile tier, and graph rank-zone cutoffs are ordered by
 raw rating, highest first. Players with identical ratings are ordered by account

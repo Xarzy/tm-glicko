@@ -3,6 +3,8 @@ import { sqliteTable, integer, text, real, primaryKey, index } from 'drizzle-orm
 export const ratingModeValues = ['qualifying', 'cup'] as const;
 export type RatingMode = typeof ratingModeValues[number];
 
+export const MIN_RANKED_COTDS = 10;
+
 export const playerRatingStateTable = sqliteTable('player_rating_state', {
   accountId: text('account_id').notNull(),
   mode: text('mode', { enum: ratingModeValues }).notNull(),
