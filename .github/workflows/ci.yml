@@ -21,12 +21,6 @@ jobs:
       - name: Run tests with coverage
         run: bun run test:cov
 
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./coverage/lcov.info
-          fail_ci_if_error: true
-
   typecheck:
     name: Type-check
     runs-on: ubuntu-latest
