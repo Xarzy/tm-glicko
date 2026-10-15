@@ -84,6 +84,12 @@ export interface RankThresholdBand {
   maxRating: number;
 }
 
+export interface RankDivisionRatingRange {
+  division: number;
+  startRating: number;
+  endRating: number;
+}
+
 export function formatTopPercentage(topPercentage: number): string {
   const options: Intl.NumberFormatOptions = topPercentage < 1
     ? { maximumSignificantDigits: 1 }
@@ -148,6 +154,67 @@ export async function getCotdDivisionEstimate(rating: number): Promise<number | 
   }
 
   return estimateCotdDivision(rating, cachedCotdDivisionSamples.samples);
+}
+
+export function getRankDivisionRatingRangesFromRatings(
+  rank: RankDefinition,
+  totalPlayers: number,
+  ratings: number[],
+): RankDivisionRatingRange[] {
+  if (totalPlayers <= 0 || ratings.length === 0) return [];
+
+  const ratingAtPercentile = (percentile: number): number => {
+    const index = Math.min(
+      ratings.length - 1,
+      Math.max(0, Math.floor(percentile * totalPlayers)),
+    );
+    return ratings[index];
+  };
+
+  if (rank.code === 'ssl') {
+    const startRating = ratingAtPercentile(rank.topPercent);
+    const endRating = ratings[0];
+    return Array.from({ length: 4 }, (_, index) => ({
+      division: index + 1,
+      startRating: startRating + ((endRating - startRating) * index) / 4,
+      endRating: startRating + ((endRating - startRating) * (index + 1)) / 4,
+    }));
+  }
+
+  const rankIndex = RL_RANKS.findIndex(rankDefinition => rankDefinition.code === rank.code);
+  if (rankIndex < 0) {
+    throw new Error(`Unknown competitive rank: ${rank.code}`);
+  }
+
+  const upperPercentBound = rankIndex > 0 ? RL_RANKS[rankIndex - 1].topPercent : 0;
+  const rankWidth = rank.topPercent - upperPercentBound;
+
+  return Array.from({ length: 4 }, (_, index) => {
+    const startPercentile = rank.topPercent - (rankWidth * index) / 4;
+    const endPercentile = rank.topPercent - (rankWidth * (index + 1)) / 4;
+    return {
+      division: index + 1,
+      startRating: ratingAtPercentile(startPercentile),
+      endRating: ratingAtPercentile(endPercentile),
+    };
+  });
+}
+
+export async function getRankDivisionRatingRanges(
+  rankCode: string,
+  totalPlayers?: number,
+): Promise<RankDivisionRatingRange[]> {
+  const players = await getActivePlayers();
+  const rank = RL_RANKS.find(rankDefinition => rankDefinition.code === rankCode);
+  if (!rank) {
+    throw new Error(`Unknown competitive rank: ${rankCode}`);
+  }
+
+  return getRankDivisionRatingRangesFromRatings(
+    rank,
+    totalPlayers ?? players.length,
+    players.map(player => player.rating),
+  );
 }
 
 /**

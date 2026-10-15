@@ -109,6 +109,7 @@ The bot registers slash commands from `src/commands/`:
 
 - `playerrating` — lookup a player's COTD qualifying rating
 - `playerrank` — lookup a player's rating by leaderboard rank
+- `playercard` — show a compact player card by username or leaderboard rank
 - `graphrating` — generate a rating history graph for one or more players
 
 ## Data flow
