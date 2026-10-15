@@ -15,7 +15,7 @@ describe('retryDatabaseCall', () => {
     expect(attempts).toBe(3);
   });
 
-  test('gives up after five retries and rethrows the last error', async () => {
+  test('gives up after ten retries and rethrows the last error', async () => {
     let attempts = 0;
     const failure = new Error('database unavailable');
 
@@ -26,6 +26,6 @@ describe('retryDatabaseCall', () => {
       }),
     ).rejects.toBe(failure);
 
-    expect(attempts).toBe(6);
+    expect(attempts).toBe(11);
   });
 });
