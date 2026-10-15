@@ -1,6 +1,6 @@
-const MAX_RETRIES = 5;
+const MAX_RETRIES = 10;
 const INITIAL_RETRY_DELAY_MS = 100;
-const MAX_RETRY_DELAY_MS = 1000;
+const MAX_RETRY_DELAY_MS = 5000;
 
 export async function retryDatabaseCall<T>(
   operationName: string,
