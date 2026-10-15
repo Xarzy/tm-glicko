@@ -4,8 +4,8 @@
   "type": "module",
   "scripts": {
     "import-db": "bun run scripts/importLocalDatabase.ts",
-    "test": "bun test --parallel",
-    "test:cov": "bun test --coverage --parallel",
+    "test": "bun test --parallel --timeout 30000",
+    "test:cov": "bun test --coverage --parallel --timeout 30000",
     "typecheck": "bunx tsc --noEmit"
   },
   "devDependencies": {

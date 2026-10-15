@@ -2,6 +2,7 @@
 import { expect, test } from 'bun:test';
 import {
   applyQualifyingCupResult,
+  getRatingSeedRanks,
   isLikelyAbandonedQualifyingRun,
   prepareQualifyingState,
   updateEligiblePeakRating,
@@ -22,6 +23,38 @@ test('eligible-era peak rating starts at the tenth completed COTD', () => {
   expect(updateEligiblePeakRating(2100, 1900, 9)).toBe(1900);
   expect(updateEligiblePeakRating(1900, 1950, 10)).toBe(1950);
   expect(updateEligiblePeakRating(1950, 1925, 11)).toBe(1950);
+});
+
+test('rating seed ranks are ordered descending and preserve tied positions', () => {
+  expect(getRatingSeedRanks([1800, 2000, 1800, 1500, 2000])).toEqual([3, 1, 3, 5, 1]);
+  expect(getRatingSeedRanks([])).toEqual([]);
+});
+
+test('preparing an unchanged or unrated state preserves its reference', () => {
+  const state = { rating: 1600, rd: 80, vol: 0.06 };
+
+  expect(prepareQualifyingState(state, null, new Date('2026-01-15'))).toBe(state);
+  expect(prepareQualifyingState(
+    state,
+    new Date('2026-01-15'),
+    new Date('2026-01-15'),
+  )).toBe(state);
+  expect(prepareQualifyingState(
+    state,
+    new Date('2026-01-16'),
+    new Date('2026-01-15'),
+  )).toBe(state);
+});
+
+test('rating update leaves single-player fields and unmatched players unchanged', () => {
+  const state = { rating: 1600, rd: 80, vol: 0.06 };
+  const participants = [
+    { player: 'player', rank: 1, rating: 1600, rd: 80 },
+    { player: 'opponent', rank: 2, rating: 1500, rd: 100 },
+  ];
+
+  expect(applyQualifyingCupResult(state, 'player', 1, [participants[0]])).toBe(state);
+  expect(applyQualifyingCupResult(state, 'missing', 1, participants)).toBe(state);
 });
 
 test('a qualifying result updates rating and keeps uncertainty in the valid range', () => {
