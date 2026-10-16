@@ -90,6 +90,32 @@ export interface RankDivisionRatingRange {
   endRating: number;
 }
 
+export interface RankLeaderboardPositionRange {
+  firstRank: number;
+  lastRank: number;
+}
+
+export function getRankLeaderboardPositionRange(
+  rankCode: string,
+  totalPlayers: number,
+): RankLeaderboardPositionRange {
+  const rankIndex = RL_RANKS.findIndex(rank => rank.code === rankCode);
+  if (rankIndex < 0) {
+    throw new Error(`Unknown competitive rank: ${rankCode}`);
+  }
+  if (!Number.isInteger(totalPlayers) || totalPlayers < 0) {
+    throw new Error('Leaderboard size must be a non-negative integer.');
+  }
+  if (totalPlayers === 0) return { firstRank: 1, lastRank: 0 };
+
+  const upperPercent = rankIndex === 0 ? 0 : RL_RANKS[rankIndex - 1].topPercent;
+  const lowerPercent = RL_RANKS[rankIndex].topPercent;
+  return {
+    firstRank: rankIndex === 0 ? 1 : Math.floor(upperPercent * totalPlayers) + 2,
+    lastRank: Math.min(totalPlayers, Math.floor(lowerPercent * totalPlayers) + 1),
+  };
+}
+
 export function formatTopPercentage(topPercentage: number): string {
   const options: Intl.NumberFormatOptions = topPercentage < 1
     ? { maximumSignificantDigits: 1 }

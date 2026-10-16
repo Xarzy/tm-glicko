@@ -88,10 +88,9 @@ commands are registered globally.
 bun run src/index.ts
 ```
 
-The app also serves a small status page at `/` and a JSON health check at
-`/health`. It listens on `SERVER_PORT` and binds to `0.0.0.0` for hosting
-platform proxies; when running locally without `SERVER_PORT`, it uses port
-`3000`.
+The app serves the public website and JSON health check at `/health`. It listens
+on `SERVER_PORT` and binds to `0.0.0.0` for hosting platform proxies; when
+running locally without `SERVER_PORT`, it uses port `3000`.
 
 ## Automation
 
@@ -118,10 +117,22 @@ bash scripts/schedule-daily-update.sh stop
 
 The bot registers slash commands from `src/commands/`:
 
-- `playerrating` — lookup a player's COTD qualifying rating
-- `playerrank` — lookup a player's rating by leaderboard rank
+- `playerrating` — lookup a player's COTD qualifying rating by username or leaderboard rank
+- `playerrank` — compatibility alias for rank-based `/playerrating`
 - `playercard` — show a compact player card by username or leaderboard rank
 - `graphrating` — generate a rating history graph for one or more players
+
+## Website
+
+- `/` and `/leaderboard` — browse the eligible-player leaderboard by page, filter by competitive rank, or find an exact Trackmania username
+- `/players/:accountId` — shareable player profile with rank, rating, COTD division estimate, eligible-era peak, recent placements, and rating history
+- `/cotd` — browse recent processed COTDs
+- `/cotd/:cupId` — view the top 100 available placements for a COTD
+- `/health` — JSON health check for hosting platforms
+
+Only players with at least 10 completed COTDs appear as ranked players. The
+leaderboard and COTD player names use Trackmania's display-name API when OAuth
+credentials are configured; otherwise account IDs are shown.
 
 ## Data flow
 

@@ -106,6 +106,15 @@ export async function getPlayerRatingState(
   }
 }
 
+export async function getPlayerRatingStateIfExists(
+  accountId: string,
+  mode: RatingMode,
+): Promise<SelectPlayerRatingState | undefined> {
+  return db.query.playerRatingStateTable.findFirst({
+    where: and(eq(playerRatingStateTable.accountId, accountId), eq(playerRatingStateTable.mode, mode)),
+  });
+}
+
 export async function getEligiblePeakRating(accountId: string, mode: RatingMode): Promise<number | null> {
   const result = await db.get<{ peakRating: number | null }>(sql`
     WITH eligible_history AS (
@@ -223,6 +232,18 @@ export async function getPlayerRatingStateByRank(
     console.error('[getPlayerRatingStateByRank] error:', error);
     return null;
   }
+}
+
+export async function getEligibleRatingPlayerCount(mode: RatingMode = 'qualifying'): Promise<number> {
+  const result = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(playerRatingStateTable)
+    .where(and(
+      eq(playerRatingStateTable.mode, mode),
+      isNotNull(playerRatingStateTable.lastProcessedCupId),
+      gte(playerRatingStateTable.matchCount, MIN_RANKED_COTDS),
+    ));
+  return result[0]?.count ?? 0;
 }
 
 export async function getPlayerRatingStatesByRankRange(
@@ -346,6 +367,38 @@ export async function getCotdDayById(cupId: number): Promise<SelectCotdDay | und
   return db.query.cotdDaysTable.findFirst({
     where: eq(cotdDaysTable.cupId, cupId),
   });
+}
+
+export async function getRecentProcessedCotdDays(limit = 20): Promise<SelectCotdDay[]> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('COTD page size must be an integer between 1 and 100.');
+  }
+
+  return db.select().from(cotdDaysTable)
+    .where(and(isNotNull(cotdDaysTable.processedAt), gt(cotdDaysTable.cardinal, 0)))
+    .orderBy(sql`${cotdDaysTable.startDate} DESC`)
+    .limit(limit);
+}
+
+export async function getCotdResults(cupId: number, limit = 100): Promise<
+  { player: string; rank: number; score: number | null }[]
+> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('COTD result page size must be an integer between 1 and 100.');
+  }
+
+  const day = await getCotdDayById(cupId);
+  if (!day?.qualifierChallengeId) return [];
+
+  return db.select({
+    player: challengeLeaderboardsTable.player,
+    rank: challengeLeaderboardsTable.rank,
+    score: challengeLeaderboardsTable.score,
+  })
+    .from(challengeLeaderboardsTable)
+    .where(eq(challengeLeaderboardsTable.challengeId, day.qualifierChallengeId))
+    .orderBy(asc(challengeLeaderboardsTable.rank))
+    .limit(limit);
 }
 
 export async function setQualifierChallengeId(cupId: number, challengeId: number) {
@@ -550,4 +603,57 @@ export async function getRatingHistoryForAccounts(
   await Promise.all(workers);
 
   return histories.flat().sort((a, b) => a.cotdDate.localeCompare(b.cotdDate));
+}
+
+export async function getRecentEligibleRatingHistory(
+  accountId: string,
+  limit = 120,
+  mode: RatingMode = 'qualifying',
+): Promise<{ cupId: number; cotdDate: string; name: string; cardinal: number | null; rank: number | null; rating: number }[]> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+    throw new Error('Rating history limit must be an integer between 1 and 500.');
+  }
+
+  const eligibleHistory = db.$with('eligible_history').as(
+    db.select({
+      id: playerRatingHistoryTable.id,
+      cupId: playerRatingHistoryTable.cupId,
+      cotdDate: playerRatingHistoryTable.cotdDate,
+      rank: playerRatingHistoryTable.rank,
+      rating: playerRatingHistoryTable.rating,
+      completedCotds: sql<number>`row_number() over (
+        order by ${playerRatingHistoryTable.cotdDate} asc, ${playerRatingHistoryTable.id} asc
+      )`.as('completed_cotds'),
+    })
+      .from(playerRatingHistoryTable)
+      .innerJoin(
+        playerRatingStateTable,
+        and(
+          eq(playerRatingStateTable.accountId, playerRatingHistoryTable.accountId),
+          eq(playerRatingStateTable.mode, mode),
+          isNotNull(playerRatingStateTable.lastProcessedCupId),
+          gte(playerRatingStateTable.matchCount, MIN_RANKED_COTDS),
+        ),
+      )
+      .where(and(
+        eq(playerRatingHistoryTable.accountId, accountId),
+        eq(playerRatingHistoryTable.mode, mode),
+        eq(playerRatingHistoryTable.isFlagged, false),
+      ))
+  );
+  const rows = await db.with(eligibleHistory).select({
+    cupId: eligibleHistory.cupId,
+    cotdDate: eligibleHistory.cotdDate,
+    name: cotdDaysTable.name,
+    cardinal: cotdDaysTable.cardinal,
+    rank: eligibleHistory.rank,
+    rating: eligibleHistory.rating,
+  })
+    .from(eligibleHistory)
+    .innerJoin(cotdDaysTable, eq(cotdDaysTable.cupId, eligibleHistory.cupId))
+    .where(gte(eligibleHistory.completedCotds, MIN_RANKED_COTDS))
+    .orderBy(sql`${eligibleHistory.cotdDate} DESC`, sql`${eligibleHistory.id} DESC`)
+    .limit(limit);
+
+  return rows.reverse();
 }
