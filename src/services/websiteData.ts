@@ -23,7 +23,9 @@ import {
   getCotdDivisionEstimate,
   getRankLeaderboardPositionRange,
   getPlayerTier,
+  getRankThresholdBands,
   RL_RANKS,
+  type RankThresholdBand,
   type PlayerRankTierInfo,
 } from './rankService';
 
@@ -38,6 +40,7 @@ export interface WebsitePlayerHistoryPoint {
   cardinal: number | null;
   rank: number | null;
   rating: number;
+  ratingChange: number | null;
 }
 
 export type WebsitePlayerProfile =
@@ -53,6 +56,7 @@ export type WebsitePlayerProfile =
     peakRating: number | null;
     divisionEstimate: number | null;
     history: WebsitePlayerHistoryPoint[];
+    rankBands: RankThresholdBand[];
   };
 
 export interface WebsiteLeaderboardEntry {
@@ -153,11 +157,12 @@ async function getPlayerProfile(accountId: string): Promise<WebsitePlayerProfile
   if (rankResult.rank < 1 || rankResult.total < 1) {
     throw new Error(`Could not load leaderboard rank for player ${accountId}.`);
   }
-  const [tier, peakRating, divisionEstimate, history] = await Promise.all([
+  const [tier, peakRating, divisionEstimate, history, rankBands] = await Promise.all([
     getPlayerTier(state.rating, rankResult.rank, rankResult.total),
     getEligiblePeakRating(accountId, 'qualifying'),
     getCotdDivisionEstimate(state.rating),
     getRecentEligibleRatingHistory(accountId, 120),
+    getRankThresholdBands(),
   ]);
 
   return {
@@ -171,6 +176,7 @@ async function getPlayerProfile(accountId: string): Promise<WebsitePlayerProfile
     peakRating,
     divisionEstimate,
     history,
+    rankBands,
   };
 }
 

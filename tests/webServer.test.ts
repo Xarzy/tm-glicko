@@ -61,6 +61,7 @@ const history: WebsitePlayerHistoryPoint[] = [{
   cardinal: cotdDay.cardinal,
   rank: 12,
   rating: 2600,
+  ratingChange: 25.5,
 }];
 const rankedProfile: WebsitePlayerProfile = {
   status: 'ranked',
@@ -73,6 +74,7 @@ const rankedProfile: WebsitePlayerProfile = {
   peakRating: 2650,
   divisionEstimate: 2,
   history,
+  rankBands: [{ rank: tier.rank, minRating: 0, maxRating: 5000 }],
 };
 
 const leaderboardEntry: WebsiteLeaderboardEntry = {
@@ -181,6 +183,8 @@ test('renders ranked shareable profiles with rating history and placements', asy
     expect(html).toContain('Leaderboard rank');
     expect(html).toContain('Eligible-era peak');
     expect(html).toContain('Rating history');
+    expect(html).toContain('>GC1</text>');
+    expect(html).toContain('+25.5');
     expect(html).toContain('Division 2');
     expect(html).toContain('placement #12');
     expect(html).toContain('Player &lt;script&gt;');
@@ -251,17 +255,26 @@ test('handles missing COTDs, invalid IDs, health checks, and unsupported methods
   });
 });
 
-test('escapes HTML and creates safe rating chart SVG', () => {
+test('escapes HTML and shows rating changes on hover without adding visible point markers', () => {
   expect(escapeHtml(`<img src=x onerror="bad">&`)).toBe('&lt;img src=x onerror=&quot;bad&quot;&gt;&amp;');
   expect(renderRatingChart([])).toContain('No eligible rating history');
 
   const chart = renderRatingChart([
-    { cotdDate: '2026-01-01', rating: 1400 },
-    { cotdDate: '2026-01-02', rating: 1500 },
-  ]);
+    { ...history[0], cotdDate: '2026-01-01', rating: 1400, ratingChange: null },
+    { ...history[0], cupId: 20260102, name: 'Final & <unsafe>', cotdDate: '2026-01-02', rating: 1500, ratingChange: 100 },
+  ], [{
+    rank: tier.rank,
+    minRating: 1400,
+    maxRating: 1500,
+  }]);
   expect(chart).toContain('<svg');
   expect(chart).toContain('1,400');
   expect(chart).toContain('1,500');
+  expect(chart).toContain('<title>2026-01-02 · Final &amp; &lt;unsafe&gt; · rating 1,500 · change +100.0</title>');
+  expect(chart).toContain('fill="transparent" pointer-events="all"');
+  expect(chart).toContain('>GC1</text>');
+  expect(chart).not.toContain('fill="#45c9b5" stroke="#10151e"');
+  expect(chart).not.toContain('Every result');
   expect(chart).not.toContain('<script>');
 });
 

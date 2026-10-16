@@ -6,6 +6,7 @@ import type {
   WebsitePlayerHistoryPoint,
   WebsitePlayerProfile,
 } from './websiteData';
+import type { RankThresholdBand } from './rankService';
 
 const PAGE_SIZE = 50;
 
@@ -44,6 +45,7 @@ function layout(title: string, content: string): string {
     .stat{background:#171e29;border:1px solid #293442;border-radius:12px;padding:14px}.stat span{display:block;color:#a4afbd;font-size:.85rem}.stat strong{font-size:1.2rem}
     .list{padding:0;list-style:none}.list li{padding:12px 0;border-bottom:1px solid #293442}.list li:last-child{border:0}
     .chart{width:100%;height:auto;display:block;background:#111720;border-radius:12px}.empty{padding:22px;text-align:center;color:#a4afbd}
+    .chart-wrap{overflow-x:auto}
     footer{color:#8290a1;border-top:1px solid #28313d;padding:20px;text-align:center;font-size:.85rem}
     @media(max-width:560px){nav{gap:14px;font-size:.9rem}main{padding-top:24px}.panel{padding:15px}form.search{flex-wrap:wrap}form.search input{flex-basis:100%}}
   </style>
@@ -146,28 +148,68 @@ function renderCotdList(days: SelectCotdDay[], compact = false): string {
     ${items.length ? `<ul class="list">${items.join('')}</ul>` : '<p class="muted">No processed COTD results are available yet.</p>'}</section>`;
 }
 
-export function renderRatingChart(history: { cotdDate: string; rating: number }[]): string {
+function formatRatingChange(change: number | null): string {
+  if (change === null) return '—';
+  return `${change >= 0 ? '+' : ''}${change.toFixed(1)}`;
+}
+
+export function renderRatingChart(
+  history: WebsitePlayerHistoryPoint[],
+  bands: RankThresholdBand[] = [],
+): string {
   if (history.length === 0) return '<p class="muted">No eligible rating history is available yet.</p>';
   const width = 900;
-  const height = 240;
-  const padding = 28;
+  const height = 360;
+  const margin = { top: 24, right: 18, bottom: 38, left: 74 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
   const values = history.map(point => point.rating);
-  const minimum = Math.min(...values);
-  const maximum = Math.max(...values);
-  const range = Math.max(1, maximum - minimum);
-  const points = history.map((point, index) => {
-    const x = padding + (index / Math.max(1, history.length - 1)) * (width - padding * 2);
-    const y = height - padding - ((point.rating - minimum) / range) * (height - padding * 2);
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(' ');
+  const minimum = Math.max(0, Math.floor((Math.min(...values) - 40) / 100) * 100);
+  const maximum = Math.ceil((Math.max(...values) + 40) / 100) * 100;
+  const ratingRange = Math.max(1, maximum - minimum);
+  const xAt = (index: number) =>
+    margin.left + (index / Math.max(1, history.length - 1)) * plotWidth;
+  const yAt = (rating: number) =>
+    margin.top + plotHeight - ((rating - minimum) / ratingRange) * plotHeight;
+  const grid = Array.from(
+    { length: Math.floor((maximum - minimum) / 100) + 1 },
+    (_, index) => {
+      const rating = minimum + index * 100;
+      const y = yAt(rating);
+      return `<line x1="${margin.left}" y1="${y}" x2="${width - margin.right}" y2="${y}" stroke="#26303c" stroke-dasharray="3 4"/>
+        <text x="${margin.left - 10}" y="${y + 4}" fill="#9aa4b2" font-size="12" text-anchor="end">${formatRating(rating)}</text>`;
+    },
+  ).join('');
+  const rankZones = bands.map(band => {
+    const bandMinimum = Math.max(minimum, band.minRating);
+    const bandMaximum = Math.min(maximum, band.maxRating);
+    if (bandMaximum <= bandMinimum) return '';
+    const y = yAt(bandMaximum);
+    const bandHeight = yAt(bandMinimum) - y;
+    if (bandHeight < 1) return '';
+    return `<rect x="${margin.left}" y="${y}" width="${plotWidth}" height="${bandHeight}" fill="${band.rank.svgColor}" fill-opacity="0.18" stroke="${band.rank.svgColor}" stroke-opacity="0.45"/>
+      <line x1="${margin.left}" y1="${y}" x2="${width - margin.right}" y2="${y}" stroke="${band.rank.svgColor}" stroke-opacity="0.9" stroke-width="1.5"/>
+      ${bandHeight >= 17 ? `<text x="${margin.left + 7}" y="${y + 13}" fill="${band.rank.svgColor}" font-size="11" font-weight="700">${escapeHtml(band.rank.shortName)}</text>` : ''}`;
+  }).join('');
+  const path = history.map((point, index) =>
+    `${index === 0 ? 'M' : 'L'} ${xAt(index).toFixed(1)} ${yAt(point.rating).toFixed(1)}`
+  ).join(' ');
+  const hoverTargets = history.map((point, index) => {
+    const change = formatRatingChange(point.ratingChange);
+    return `<circle cx="${xAt(index).toFixed(1)}" cy="${yAt(point.rating).toFixed(1)}" r="5" fill="transparent" pointer-events="all">
+      <title>${escapeHtml(point.cotdDate)} · ${escapeHtml(point.name)} · rating ${formatRating(point.rating)} · change ${escapeHtml(change)}</title>
+    </circle>`;
+  }).join('');
 
-  return `<svg class="chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Rating history from ${escapeHtml(history[0].cotdDate)} to ${escapeHtml(history[history.length - 1].cotdDate)}">
-    <line x1="${padding}" y1="${height - padding}" x2="${width - padding}" y2="${height - padding}" stroke="#354151"/>
-    <polyline points="${points}" fill="none" stroke="#45c9b5" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-    <text x="${padding}" y="20" fill="#a4afbd" font-size="13">${formatRating(maximum)}</text>
-    <text x="${padding}" y="${height - 6}" fill="#a4afbd" font-size="13">${formatRating(minimum)}</text>
-    <text x="${width - padding}" y="${height - 6}" fill="#a4afbd" font-size="13" text-anchor="end">${escapeHtml(history[history.length - 1].cotdDate)}</text>
-  </svg>`;
+  return `<div class="chart-wrap"><svg class="chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Rating history from ${escapeHtml(history[0].cotdDate)} to ${escapeHtml(history[history.length - 1].cotdDate)}">
+    ${rankZones}
+    ${grid}
+    <path d="${path}" fill="none" stroke="#45c9b5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    ${hoverTargets}
+    <line x1="${margin.left}" y1="${margin.top + plotHeight}" x2="${width - margin.right}" y2="${margin.top + plotHeight}" stroke="#354151"/>
+    <text x="${margin.left}" y="${height - 10}" fill="#a4afbd" font-size="12">${escapeHtml(history[0].cotdDate)}</text>
+    <text x="${width - margin.right}" y="${height - 10}" fill="#a4afbd" font-size="12" text-anchor="end">${escapeHtml(history[history.length - 1].cotdDate)}</text>
+  </svg></div>`;
 }
 
 function renderPlayerCotdResults(history: WebsitePlayerHistoryPoint[]): string {
@@ -201,6 +243,7 @@ function renderPlayerProfile(profile: WebsitePlayerProfile | null, accountId: st
     peakRating,
     divisionEstimate,
     history,
+    rankBands,
   } = profile;
   const firstHistoryDate = history[0]?.cotdDate ?? '—';
   const lastHistoryDate = history[history.length - 1]?.cotdDate ?? '—';
@@ -217,7 +260,7 @@ function renderPlayerProfile(profile: WebsitePlayerProfile | null, accountId: st
     </div>
     <section class="panel"><h2>Rating history</h2>
       <p class="muted">Showing up to the latest ${history.length} eligible results · ${escapeHtml(firstHistoryDate)} to ${escapeHtml(lastHistoryDate)}</p>
-      ${renderRatingChart(history)}
+      ${renderRatingChart(history, rankBands)}
     </section>
     <section class="panel"><h2>Recent COTD results</h2>${renderPlayerCotdResults(history)}</section>`;
   return htmlResponse(layout(`${username} profile`, content));

@@ -609,7 +609,7 @@ export async function getRecentEligibleRatingHistory(
   accountId: string,
   limit = 120,
   mode: RatingMode = 'qualifying',
-): Promise<{ cupId: number; cotdDate: string; name: string; cardinal: number | null; rank: number | null; rating: number }[]> {
+): Promise<{ cupId: number; cotdDate: string; name: string; cardinal: number | null; rank: number | null; rating: number; ratingChange: number | null }[]> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
     throw new Error('Rating history limit must be an integer between 1 and 500.');
   }
@@ -621,6 +621,9 @@ export async function getRecentEligibleRatingHistory(
       cotdDate: playerRatingHistoryTable.cotdDate,
       rank: playerRatingHistoryTable.rank,
       rating: playerRatingHistoryTable.rating,
+      previousRating: sql<number | null>`lag(${playerRatingHistoryTable.rating}) over (
+        order by ${playerRatingHistoryTable.cotdDate} asc, ${playerRatingHistoryTable.id} asc
+      )`.as('previous_rating'),
       completedCotds: sql<number>`row_number() over (
         order by ${playerRatingHistoryTable.cotdDate} asc, ${playerRatingHistoryTable.id} asc
       )`.as('completed_cotds'),
@@ -648,6 +651,7 @@ export async function getRecentEligibleRatingHistory(
     cardinal: cotdDaysTable.cardinal,
     rank: eligibleHistory.rank,
     rating: eligibleHistory.rating,
+    previousRating: eligibleHistory.previousRating,
   })
     .from(eligibleHistory)
     .innerJoin(cotdDaysTable, eq(cotdDaysTable.cupId, eligibleHistory.cupId))
@@ -655,5 +659,9 @@ export async function getRecentEligibleRatingHistory(
     .orderBy(sql`${eligibleHistory.cotdDate} DESC`, sql`${eligibleHistory.id} DESC`)
     .limit(limit);
 
-  return rows.reverse();
+  return rows.reverse().map(({ previousRating, rating, ...row }) => ({
+    ...row,
+    rating,
+    ratingChange: previousRating === null ? null : rating - previousRating,
+  }));
 }
