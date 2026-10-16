@@ -6,44 +6,94 @@ import { formatTopPercentage, getCotdDivisionEstimate, getNextRankGoal, getPlaye
 import { getUncertaintyCategory } from '../services/ratingPresentation';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
+import type { SelectPlayerRatingState } from '../db/schema';
 
 export const data = new SlashCommandBuilder()
   .setName('playerrating')
-  .setDescription("Gets user's Glicko-2 rating from COTD Qualifying.")
-  .addStringOption(o => o.setName('username').setDescription('Exact Trackmania username.').setRequired(true));
+  .setDescription("Gets a player's Glicko-2 rating from COTD Qualifying.")
+  .addStringOption(o => o.setName('username').setDescription('Exact Trackmania username.').setRequired(false))
+  .addIntegerOption(o =>
+    o
+      .setName('rank')
+      .setDescription('Leaderboard rank (e.g. 20).')
+      .setMinValue(1)
+      .setRequired(false)
+  );
 
 function formatDate(date: Date): string {
   return date.toISOString().split('T')[0];
 }
 
 export async function execute(interaction: ChatInputCommandInteraction) {
+  await executePlayerRatingLookup(
+    interaction,
+    interaction.options.getString('username'),
+    interaction.options.getInteger('rank'),
+  );
+}
+
+export async function executePlayerRatingLookup(
+  interaction: ChatInputCommandInteraction,
+  requestedUsername: string | null,
+  requestedRank: number | null,
+) {
   await interaction.deferReply();
 
-  const username = interaction.options.getString('username', true);
-
-  const accountId = await findAccountIdByUsername(username);
-  if (!accountId) {
-    await interaction.editReply(`No exact match for **${username}** — check spelling/casing.`);
+  if ((requestedUsername === null) === (requestedRank === null)) {
+    await interaction.editReply('Choose exactly one lookup: **username** or **rank**.');
     return;
   }
 
-  const state = await getPlayerRatingState(accountId, 'qualifying');
-  if (state.lastProcessedCupId === null || state.matchCount < MIN_RANKED_COTDS) {
-    await interaction.editReply(
-      `**${username}** is not ranked yet. Rating stats are unavailable until they complete ${MIN_RANKED_COTDS} COTDs.`
-    );
-    return;
+  let state: SelectPlayerRatingState;
+  let rank = 0;
+  let total = 0;
+  let username: string;
+
+  if (requestedRank !== null) {
+    const result = await getPlayerRatingStateByRank('qualifying', requestedRank);
+    if (!result) {
+      await interaction.editReply(`No eligible player found at rank **#${requestedRank}**.`);
+      return;
+    }
+
+    ({ state, total } = result);
+    rank = requestedRank;
+    username = (await findUsernameByAccountId(state.accountId)) ?? state.accountId;
+  } else {
+    if (requestedUsername === null) {
+      throw new Error('Player rating lookup requires either a username or rank.');
+    }
+    const usernameQuery = requestedUsername;
+    const accountId = await findAccountIdByUsername(usernameQuery);
+    if (!accountId) {
+      await interaction.editReply(`No exact match for **${usernameQuery}** — check spelling/casing.`);
+      return;
+    }
+
+    state = await getPlayerRatingState(accountId, 'qualifying');
+    if (state.lastProcessedCupId === null || state.matchCount < MIN_RANKED_COTDS) {
+      await interaction.editReply(
+        `**${usernameQuery}** is not ranked yet. Rating stats are unavailable until they complete ${MIN_RANKED_COTDS} COTDs.`
+      );
+      return;
+    }
+
+    username = (await findUsernameByAccountId(state.accountId)) ?? usernameQuery;
   }
 
   const [rankResult, lastCup, peakRating] = await Promise.all([
-    getRatingRank('qualifying', state.accountId, state.rating),
+    requestedRank === null
+      ? getRatingRank('qualifying', state.accountId, state.rating)
+      : Promise.resolve(null),
     state.lastProcessedCupId === null ? Promise.resolve(null) : getCotdDayById(state.lastProcessedCupId),
     getEligiblePeakRating(state.accountId, 'qualifying'),
   ]);
   if (peakRating === null) {
     throw new Error(`Could not load eligible-era peak rating for account ${state.accountId}.`);
   }
-  const { rank, total } = rankResult;
+  if (rankResult) {
+    ({ rank, total } = rankResult);
+  }
   const closestPlayersFrom = Math.max(1, Math.min(rank - 2, total - 4));
   const closestPlayersTo = Math.min(total, closestPlayersFrom + 4);
   const { states: closestPlayerStates } = await getPlayerRatingStatesByRankRange(
@@ -100,7 +150,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   const embed = new EmbedBuilder()
     .setColor(tierInfo.rank.tierColor)
-    .setTitle(`${username} Rating Info`)
+    .setTitle(requestedRank === null ? `${username} Rating Info` : `Rank ${rank} (${username}) Rating Info`)
     .addFields(
       {
         name: 'Competitive Rank',
