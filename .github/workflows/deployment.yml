@@ -1,0 +1,24 @@
+name: Deployment
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    steps:
+        - name: Check out repository
+          uses: actions/checkout@v7
+        - name: Install Bot Hosting CLI
+          run: npm install -g bot-hosting
+        - name: Login to Bot Hosting
+          run:  echo ${{secrets.DEPLOY_AUTH_TOKEN}} | bh login
+        - name: Link Project
+          run: echo 1 | bh link
+        - name: Deploy to Production
+          run: bh deploy
+        - name: Verify Deployment
+          run: status=$(bh status | awk 'NR==1 {print $4}'); while [ "$status" != "running" ]; if [ "$status" == "offline" ]; then echo "Deployment failed."; exit 1; fi; echo "Waiting for deployment to complete..."; sleep 5; done
