@@ -1,6 +1,12 @@
-![alt](https://github.com/Xarzy/tm-glicko/actions/workflows/ci.yml/badge.svg)
-
-# TM Glicko
+<h1 align="center">
+  TM Glicko
+</h1>
+<p align="center">
+    <a href="https://github.com/Xarzy/tm-glicko/actions/workflows/ci.yml/badge.svg" alt="CI Status">
+        <img src="https://github.com/Xarzy/tm-glicko/actions/workflows/ci.yml/badge.svg" /></a>
+    <a href="https://hits.dwyl.com/Xarzy/tm-glicko" alt="Repo Hits">
+        <img src="https://hits.dwyl.com/Xarzy/tm-glicko.svg" /></a>
+</p>
 
 TM Glicko is a Discord bot for Trackmania COTD ratings using a Glicko-2 style rating system. It ingests Cup of the Day data from Nadeo/Trackmania services, tracks leaderboard results, recalculates player ratings, and exposes rating lookups through Discord slash commands.
 
