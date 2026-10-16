@@ -22,3 +22,5 @@ jobs:
           run: bh deploy
         - name: Verify Deployment
           run: status=$(bh status | awk 'NR==1 {print $4}'); while [ "$status" != "running" ]; do if [ "$status" == "offline" ]; then echo "Deployment failed."; exit 1; fi; echo "Waiting for deployment to complete..."; sleep 5; done; echo "Deployment successful."
+        - name: Logout from Bot Hosting
+          run: bh logout && bh unlink
