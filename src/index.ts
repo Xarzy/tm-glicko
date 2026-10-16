@@ -94,6 +94,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
+  const guild = interaction.guild;
+  console.log(
+    `[command] /${interaction.commandName} by ${interaction.user.tag} (${interaction.user.id})`
+      + (guild ? ` in ${guild.name} (${guild.id})` : ' in a DM')
+  );
+
   try {
     await command.execute(interaction);
   } catch (error) {
