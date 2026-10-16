@@ -3,6 +3,7 @@ import type { ChatInputCommandInteraction } from 'discord.js';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { startWebServer } from './services/webServer';
 
 interface Command {
   data: { name: string; toJSON(): unknown }; // loose on purpose — matches any SlashCommandBuilder variant
@@ -11,6 +12,11 @@ interface Command {
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const commands = new Collection<string, Command>();
+const serverPort = Number(process.env.SERVER_PORT ?? 3000);
+if (!Number.isInteger(serverPort) || serverPort < 1 || serverPort > 65535) {
+  throw new Error('SERVER_PORT must be an integer between 1 and 65535.');
+}
+startWebServer(serverPort);
 
 // --- Process-level safety nets (from the freeze/logging fix earlier) ---
 process.on('unhandledRejection', (reason) => {

@@ -88,6 +88,11 @@ commands are registered globally.
 bun run src/index.ts
 ```
 
+The app also serves a small status page at `/` and a JSON health check at
+`/health`. It listens on `SERVER_PORT` and binds to `0.0.0.0` for hosting
+platform proxies; when running locally without `SERVER_PORT`, it uses port
+`3000`.
+
 ## Automation
 
 GitHub Actions runs the test suite and TypeScript type-check on pushes and pull
