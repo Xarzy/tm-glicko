@@ -267,7 +267,7 @@ test('serves linked terms of service and privacy policy pages', async () => {
     expect(terms.status).toBe(200);
     expect(termsHtml).toContain('<h1>Terms of Service</h1>');
     expect(termsHtml).toContain('laws of Spain');
-    expect(termsHtml).toContain('[Add the service operator');
+    expect(termsHtml).toContain('mailto:');
 
     const privacy = await fetch(`${baseUrl}/privacy`);
     const privacyHtml = await privacy.text();
@@ -275,7 +275,7 @@ test('serves linked terms of service and privacy policy pages', async () => {
     expect(privacyHtml).toContain('<h1>Privacy Policy</h1>');
     expect(privacyHtml).toContain('Discord account identifiers');
     expect(privacyHtml).toContain('Spanish Data Protection Agency (AEPD)');
-    expect(privacyHtml).toContain('[Add the operator');
+    expect(privacyHtml).toContain('mailto:');
   });
 });
 

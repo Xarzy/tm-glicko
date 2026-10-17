@@ -281,7 +281,7 @@ function renderPlayerCotdResults(history: WebsitePlayerHistoryPoint[]): string {
   const items = history.slice(-10).reverse().map(result =>
     `<li><a href="/cotd/${result.cupId}">${escapeHtml(result.name)}</a>
       <span class="muted"> · ${escapeHtml(result.cotdDate)} · placement ${result.rank === null ? 'unavailable' : `#${result.rank}`}
-      · rating ${formatRating(result.rating)}${result.cardinal ? ` / ${result.cardinal.toLocaleString('en-US')}` : ''}</span></li>`
+      · rating ${formatRating(result.rating)} ${result.ratingChange !== null ? `(${result.ratingChange > 0 ? '+' : ''}${result.ratingChange.toFixed(1)})` : ''}</span></li>`
   );
   return `<ul class="list">${items.join('')}</ul>`;
 }
