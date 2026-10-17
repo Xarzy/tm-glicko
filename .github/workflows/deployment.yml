@@ -13,11 +13,11 @@ jobs:
         - name: Check out repository
           uses: actions/checkout@v7
         - name: Install Bot Hosting CLI
-          run: npm install -g bot-hosting && bh status
+          run: npm install -g bot-hosting
         - name: Login to Bot Hosting
           run:  echo ${{secrets.DEPLOY_AUTH_TOKEN}} | bh login
         - name: Link Project
-          run: echo 1 | bh link
+          run: echo 1 | bh link && bh status
         - name: Deploy to Production
           run: bh deploy
         - name: Verify Deployment
