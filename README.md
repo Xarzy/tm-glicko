@@ -128,6 +128,8 @@ The bot registers slash commands from `src/commands/`:
 - `/players/:accountId` — shareable player profile with rank, rating, COTD division estimate, eligible-era peak, recent placements, and rating history
 - `/cotd` — browse recent processed COTDs
 - `/cotd/:cupId` — view the top 100 available placements for a COTD
+- `/terms` — Terms of Service
+- `/privacy` — Privacy Policy
 - `/health` — JSON health check for hosting platforms
 
 Only players with at least 10 completed COTDs appear as ranked players. The

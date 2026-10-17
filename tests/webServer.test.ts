@@ -255,6 +255,30 @@ test('handles missing COTDs, invalid IDs, health checks, and unsupported methods
   });
 });
 
+test('serves linked terms of service and privacy policy pages', async () => {
+  await withServer(createDataSource(), async baseUrl => {
+    const home = await fetch(baseUrl);
+    const homeHtml = await home.text();
+    expect(homeHtml).toContain('href="/terms">Terms of Service</a>');
+    expect(homeHtml).toContain('href="/privacy">Privacy Policy</a>');
+
+    const terms = await fetch(`${baseUrl}/terms`);
+    const termsHtml = await terms.text();
+    expect(terms.status).toBe(200);
+    expect(termsHtml).toContain('<h1>Terms of Service</h1>');
+    expect(termsHtml).toContain('laws of Spain');
+    expect(termsHtml).toContain('[Add the service operator');
+
+    const privacy = await fetch(`${baseUrl}/privacy`);
+    const privacyHtml = await privacy.text();
+    expect(privacy.status).toBe(200);
+    expect(privacyHtml).toContain('<h1>Privacy Policy</h1>');
+    expect(privacyHtml).toContain('Discord account identifiers');
+    expect(privacyHtml).toContain('Spanish Data Protection Agency (AEPD)');
+    expect(privacyHtml).toContain('[Add the operator');
+  });
+});
+
 test('escapes HTML and shows rating changes on hover without adding visible point markers', () => {
   expect(escapeHtml(`<img src=x onerror="bad">&`)).toBe('&lt;img src=x onerror=&quot;bad&quot;&gt;&amp;');
   expect(renderRatingChart([])).toContain('No eligible rating history');
