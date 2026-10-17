@@ -137,6 +137,23 @@ test('serves a searchable, paginated leaderboard and recent COTDs', async () => 
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).toContain('Filter competitive rank');
     expect(html).toContain('Next →');
+    expect(html).toContain('id="initial-loader"');
+    expect(html).toContain('id="page-content"');
+    expect(html).toContain("classList.add('document-loading')");
+
+    const stylesheet = await fetch(`${baseUrl}/assets/site.css`);
+    expect(stylesheet.status).toBe(200);
+    expect(stylesheet.headers.get('content-type')).toContain('text/css');
+    const css = await stylesheet.text();
+    expect(css).toContain('bg-\\[\\#10151e\\]');
+    expect(css).toContain('prefers-reduced-motion');
+    expect(css).toContain('skeleton-shimmer');
+
+    const navigationScript = await fetch(`${baseUrl}/assets/site.js`);
+    expect(navigationScript.status).toBe(200);
+    expect(navigationScript.headers.get('content-type')).toContain('text/javascript');
+    expect(await navigationScript.text()).toContain('Loading page');
+    expect(html).toContain('<script src="/assets/site.js" defer=""></script>');
 
     const secondPage = await fetch(`${baseUrl}/leaderboard?page=2&tier=gc1`);
     expect(secondPage.status).toBe(200);
@@ -155,7 +172,7 @@ test('search redirects exact matches to shareable profiles and escapes misses', 
     const html = await missing.text();
     expect(missing.status).toBe(200);
     expect(html).toContain('&lt;script&gt;');
-    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('<script>alert(1)</script>');
   });
 });
 
@@ -247,6 +264,9 @@ test('handles missing COTDs, invalid IDs, health checks, and unsupported methods
     const health = await fetch(`${baseUrl}/health`);
     expect(await health.json()).toEqual({ status: 'ok' });
 
+    const head = await fetch(baseUrl, { method: 'HEAD' });
+    expect(head.status).toBe(200);
+
     const method = await fetch(baseUrl, { method: 'POST' });
     expect(method.status).toBe(405);
 
@@ -265,14 +285,14 @@ test('serves linked terms of service and privacy policy pages', async () => {
     const terms = await fetch(`${baseUrl}/terms`);
     const termsHtml = await terms.text();
     expect(terms.status).toBe(200);
-    expect(termsHtml).toContain('<h1>Terms of Service</h1>');
+    expect(termsHtml).toContain('>Terms of Service</h1>');
     expect(termsHtml).toContain('laws of Spain');
     expect(termsHtml).toContain('mailto:');
 
     const privacy = await fetch(`${baseUrl}/privacy`);
     const privacyHtml = await privacy.text();
     expect(privacy.status).toBe(200);
-    expect(privacyHtml).toContain('<h1>Privacy Policy</h1>');
+    expect(privacyHtml).toContain('>Privacy Policy</h1>');
     expect(privacyHtml).toContain('Discord account identifiers');
     expect(privacyHtml).toContain('Spanish Data Protection Agency (AEPD)');
     expect(privacyHtml).toContain('mailto:');

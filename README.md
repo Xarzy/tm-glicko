@@ -31,6 +31,7 @@ tracks ratings from the player's 10th completed COTD onward.
 - `src/index.ts` — bot bootstrap and slash command registration
 - `src/commands/` — Discord slash commands
 - `src/services/` — Trackmania auth, ingestion, rating math, presentation logic
+- `src/services/website/` — website layout, page rendering, legal pages, and routes
 - `src/db/` — SQLite schema and database access helpers
 - `src/jobs/` — scheduled update tasks
 - `scripts/` — maintenance tasks such as recalculation and data backfills
@@ -41,6 +42,9 @@ tracks ratings from the player's 10th completed COTD onward.
 - Bun
 - TypeScript
 - Discord.js
+- Hono for website routing
+- React server-side rendering
+- Tailwind CSS
 - Drizzle ORM
 - SQLite
 - Glicko-2 library
@@ -85,8 +89,13 @@ commands are registered globally.
 3. Start the bot:
 
 ```bash
-bun run src/index.ts
+bun run start
 ```
+
+The start command builds the Tailwind stylesheet before launching the Bun app.
+The website uses Hono routes and React server-side rendering; it does not ship a
+client-side React bundle. Internal navigation and searches display animated
+skeleton loaders while pages load, with reduced-motion preferences respected.
 
 The app serves the public website and JSON health check at `/health`. It listens
 on `SERVER_PORT` and binds to `0.0.0.0` for hosting platform proxies; when

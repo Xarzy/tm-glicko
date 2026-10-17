@@ -18,6 +18,12 @@ jobs:
           run:  echo ${{secrets.DEPLOY_AUTH_TOKEN}} | bh login
         - name: Link Project
           run: echo 1 | bh link
+        - name: Update Startup Command
+          run: |
+            curl -X PATCH "https://bot-hosting.net/api/v1/deployments/$(awk -F'"' '/deploymentId/ {print $4}' .bothosting/project.json)/startup" \
+            -H "Authorization: Bearer ${{secrets.DEPLOY_AUTH_TOKEN}}" \
+            -H "Content-Type: application/json" \
+            -d '{"startCommand":"${{vars.START_COMMAND}}"}'
         - name: Deploy to Production
           run: bh deploy
         - name: Verify Deployment
