@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { join } from 'node:path';
 import type { WebsiteDataSource } from '../websiteData';
-import { htmlResponse, Layout } from './html';
+import { htmlResponse } from './html';
 import { renderLegalPage } from './legalPages';
-import { CotdList, renderCotdDetail, renderLeaderboard, renderPlayerProfile } from './pages';
+import { renderCotdDetail, renderCotdList, renderLeaderboard, renderPlayerProfile } from './pages';
 
 async function getDataSource(data?: WebsiteDataSource): Promise<WebsiteDataSource> {
   return data ?? (await import('../websiteData')).websiteData;
@@ -54,14 +54,14 @@ export function createWebsiteApp(data?: WebsiteDataSource) {
   );
   app.on(['GET', 'HEAD'], '/cotd', async context => {
     const source = await getDataSource(data);
-    return htmlResponse('Recent COTDs', <CotdList days={await source.getRecentProcessedCotdDays(50)} />);
+    return htmlResponse('Recent COTDs', renderCotdList(await source.getRecentProcessedCotdDays(50)));
   });
   app.on(['GET', 'HEAD'], '/terms', () => renderLegalPage('terms'));
   app.on(['GET', 'HEAD'], '/privacy', () => renderLegalPage('privacy'));
   app.on(['GET', 'HEAD'], '/players/:accountId', async context => {
     const accountId = context.req.param('accountId');
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(accountId)) {
-      return htmlResponse('Not found', <><h1>Page not found</h1><p><a href="/">Go to the leaderboard</a></p></>, 404);
+      return htmlResponse('Not found', '<h1>Page not found</h1><p><a href="/">Go to the leaderboard</a></p>', 404);
     }
     const source = await getDataSource(data);
     return renderPlayerProfile(await source.getPlayerProfile(accountId), accountId);
@@ -69,11 +69,11 @@ export function createWebsiteApp(data?: WebsiteDataSource) {
   app.on(['GET', 'HEAD'], '/cotd/:cupId', async context => {
     const rawCupId = context.req.param('cupId');
     if (!/^\d+$/.test(rawCupId)) {
-      return htmlResponse('Invalid COTD', <h1>Invalid COTD ID</h1>, 400);
+      return htmlResponse('Invalid COTD', '<h1>Invalid COTD ID</h1>', 400);
     }
     const cupId = Number(rawCupId);
     if (!Number.isSafeInteger(cupId) || cupId < 1) {
-      return htmlResponse('Invalid COTD', <h1>Invalid COTD ID</h1>, 400);
+      return htmlResponse('Invalid COTD', '<h1>Invalid COTD ID</h1>', 400);
     }
     const source = await getDataSource(data);
     return renderCotdDetail(await source.getCotdDetail(cupId));
@@ -87,7 +87,7 @@ export function createWebsiteApp(data?: WebsiteDataSource) {
   });
   app.notFound(() => htmlResponse(
     'Not found',
-    <><h1>Page not found</h1><p><a href="/">Go to the leaderboard</a></p></>,
+    '<h1>Page not found</h1><p><a href="/">Go to the leaderboard</a></p>',
     404,
   ));
 
