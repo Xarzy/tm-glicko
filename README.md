@@ -92,10 +92,12 @@ commands are registered globally.
 bun run start
 ```
 
-The start command builds the Tailwind stylesheet before launching the Bun app.
-The website uses Hono routes and escaped HTML templates. Internal navigation
-and searches display animated skeleton loaders while pages load, with
-reduced-motion preferences respected.
+The start command launches the Bun app without running the Tailwind compiler. 
+The deployment workflow builds the stylesheet on GitHub Actions before uploading it. 
+For local development, run `bun run build:css` after changing website styles. 
+The website uses Hono routes and escaped HTML templates. Internal navigation and 
+searches display animated skeleton loaders while pages load, with reduced-motion
+preferences respected.
 
 The app serves the public website and JSON health check at `/health`. It listens
 on `SERVER_PORT` and binds to `0.0.0.0` for hosting platform proxies; when

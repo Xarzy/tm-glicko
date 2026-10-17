@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build:css": "tailwindcss -i src/services/website/input.css -o public/site.css --minify",
-    "start": "bun run build:css && bun run src/index.ts",
+    "start": "bun run src/index.ts",
     "import-db": "bun run scripts/importLocalDatabase.ts",
     "test": "bun run build:css && bun test --parallel --timeout 30000",
     "test:cov": "bun run build:css && bun test --coverage --parallel --timeout 30000",
