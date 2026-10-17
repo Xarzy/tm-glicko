@@ -17,10 +17,10 @@ jobs:
         - name: Login to Bot Hosting
           run:  echo ${{secrets.DEPLOY_AUTH_TOKEN}} | bh login
         - name: Link Project
-          run: echo 1 | bh link && bh status
+          run: echo 1 | bh link
         - name: Deploy to Production
           run: bh deploy
         - name: Verify Deployment
-          run: sleep 5; status=$(bh status | awk 'NR==1 {print $4}'); while [ "$status" != "running" ]; do if [ "$status" == "offline" ]; then echo "Deployment failed."; exit 1; fi; echo "Waiting for deployment to complete..."; sleep 5; done; echo "Deployment successful."
+          run: sleep 5; while true; do status=$(bh status | awk 'NR==1 {print $4; exit}'); if [ "$status" = "running" ]; then echo "Deployment successful."; break; fi; if [ "$status" = "offline" ]; then echo "Deployment failed."; exit 1; fi; echo "Waiting for deployment to complete... (Current: $status)"; sleep 5; done
         - name: Logout from Bot Hosting
           run: bh logout && bh unlink
