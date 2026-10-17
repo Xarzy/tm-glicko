@@ -43,7 +43,7 @@ tracks ratings from the player's 10th completed COTD onward.
 - TypeScript
 - Discord.js
 - Hono for website routing
-- Escaped HTML templates for server-rendered pages
+- React server-side rendering for website pages
 - Tailwind CSS
 - Drizzle ORM
 - SQLite
@@ -92,10 +92,11 @@ commands are registered globally.
 bun run start
 ```
 
-The start command launches the Bun app without running the Tailwind compiler. 
-The deployment workflow builds the stylesheet on GitHub Actions before uploading it. 
-For local development, run `bun run build:css` after changing website styles. 
-The website uses Hono routes and escaped HTML templates. Internal navigation and 
+The start command launches the Bun app without running the Tailwind compiler.
+The deployment workflow builds the stylesheet on GitHub Actions before
+uploading it, keeping the build out of the 256 MB hosting runtime. For local
+development, run `bun run build:css` after changing website styles. The website
+uses Hono routes and React server-side rendering. Internal navigation and
 searches display animated skeleton loaders while pages load, with reduced-motion
 preferences respected.
 
