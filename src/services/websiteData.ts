@@ -24,7 +24,7 @@ import {
   getRankLeaderboardPositionRange,
   getPlayerTier,
   getRankThresholdBands,
-  RL_RANKS,
+  TRACKMANIA_RANKS,
   type RankThresholdBand,
   type PlayerRankTierInfo,
 } from './rankService';
@@ -196,7 +196,7 @@ async function getCotdDetail(cupId: number) {
 }
 
 export const websiteData: WebsiteDataSource = {
-  rankOptions: RL_RANKS.map(rank => ({ code: rank.code, label: rank.name })),
+  rankOptions: TRACKMANIA_RANKS.map(rank => ({ code: rank.code, label: rank.name })),
   findAccountIdByUsername,
   getDisplayNames,
   getLeaderboardPage,

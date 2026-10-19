@@ -4,64 +4,33 @@ import { and, eq, gte, inArray, isNotNull, sql } from 'drizzle-orm';
 import { estimateCotdDivision } from './cotdDivisionEstimate';
 
 export interface RankDefinition {
-  code: string;       // e.g. 'ssl', 'gc3', 'd1'
-  name: string;       // e.g. 'Supersonic Legend', 'Grand Champion III'
-  shortName: string;  // e.g. 'SSL', 'GC3'
+  code: string;
+  name: string;
+  shortName: string;
   tierColor: number;  // Hex color for discord embed
   svgColor: string;   // Hex color for SVG zone
   topPercent: number; // Cumulative threshold from top (0 to 1). Lower = higher rank
-  iconFile: string;   // e.g. 'ssl.png', 'gc3.png'
+  iconFile: string;
 }
 
 /**
- * Standard Rocket League Rank Distribution (Loyal to RL Tracker / Psyonix official distributions):
- * Cumulative top percentiles:
- * SSL:       Top 0.05%
- * GC3:       Top 0.20%
- * GC2:       Top 0.50%
- * GC1:       Top 1.20%
- * C3:        Top 2.50%
- * C2:        Top 4.50%
- * C1:        Top 7.50%
- * D3:        Top 12.0%
- * D2:        Top 18.0%
- * D1:        Top 26.0%
- * P3:        Top 36.0%
- * P2:        Top 47.0%
- * P1:        Top 58.0%
- * G3:        Top 68.0%
- * G2:        Top 77.0%
- * G1:        Top 84.0%
- * S3:        Top 90.0%
- * S2:        Top 94.0%
- * S1:        Top 97.0%
- * B3:        Top 98.5%
- * B2:        Top 99.5%
- * B1:        Top 100.0%
+ * Cumulative top-percent cutoffs are interpolated across the 22 Rocket League
+ * rank cutoffs to match this 13-rank progression.
  */
-export const RL_RANKS: RankDefinition[] = [
-  { code: 'ssl', name: 'Supersonic Legend', shortName: 'SSL', tierColor: 0xffffff, svgColor: '#e0f7fa', topPercent: 0.0005, iconFile: 'ssl.png' },
-  { code: 'gc3', name: 'Grand Champion III', shortName: 'GC3', tierColor: 0xda291c, svgColor: '#b71c1c', topPercent: 0.0020, iconFile: 'gc3.png' },
-  { code: 'gc2', name: 'Grand Champion II', shortName: 'GC2', tierColor: 0xda291c, svgColor: '#c62828', topPercent: 0.0050, iconFile: 'gc2.png' },
-  { code: 'gc1', name: 'Grand Champion I', shortName: 'GC1', tierColor: 0xda291c, svgColor: '#d32f2f', topPercent: 0.0120, iconFile: 'gc1.png' },
-  { code: 'c3', name: 'Champion III', shortName: 'C3', tierColor: 0x800080, svgColor: '#6a1b9a', topPercent: 0.0250, iconFile: 'c3.png' },
-  { code: 'c2', name: 'Champion II', shortName: 'C2', tierColor: 0x800080, svgColor: '#7b1fa2', topPercent: 0.0450, iconFile: 'c2.png' },
-  { code: 'c1', name: 'Champion I', shortName: 'C1', tierColor: 0x800080, svgColor: '#8e24aa', topPercent: 0.0750, iconFile: 'c1.png' },
-  { code: 'd3', name: 'Diamond III', shortName: 'D3', tierColor: 0x0099ff, svgColor: '#0277bd', topPercent: 0.1200, iconFile: 'd3.png' },
-  { code: 'd2', name: 'Diamond II', shortName: 'D2', tierColor: 0x0099ff, svgColor: '#0288d1', topPercent: 0.1800, iconFile: 'd2.png' },
-  { code: 'd1', name: 'Diamond I', shortName: 'D1', tierColor: 0x0099ff, svgColor: '#039be5', topPercent: 0.2600, iconFile: 'd1.png' },
-  { code: 'p3', name: 'Platinum III', shortName: 'P3', tierColor: 0x00ffff, svgColor: '#00838f', topPercent: 0.3600, iconFile: 'p3.png' },
-  { code: 'p2', name: 'Platinum II', shortName: 'P2', tierColor: 0x00ffff, svgColor: '#0097a7', topPercent: 0.4700, iconFile: 'p2.png' },
-  { code: 'p1', name: 'Platinum I', shortName: 'P1', tierColor: 0x00ffff, svgColor: '#00acc1', topPercent: 0.5800, iconFile: 'p1.png' },
-  { code: 'g3', name: 'Gold III', shortName: 'G3', tierColor: 0xffcc00, svgColor: '#f9a825', topPercent: 0.6800, iconFile: 'g3.png' },
-  { code: 'g2', name: 'Gold II', shortName: 'G2', tierColor: 0xffcc00, svgColor: '#fbc02d', topPercent: 0.7700, iconFile: 'g2.png' },
-  { code: 'g1', name: 'Gold I', shortName: 'G1', tierColor: 0xffcc00, svgColor: '#fdd835', topPercent: 0.8400, iconFile: 'g1.png' },
-  { code: 's3', name: 'Silver III', shortName: 'S3', tierColor: 0xcccccc, svgColor: '#757575', topPercent: 0.9000, iconFile: 's3.png' },
-  { code: 's2', name: 'Silver II', shortName: 'S2', tierColor: 0xcccccc, svgColor: '#9e9e9e', topPercent: 0.9400, iconFile: 's2.png' },
-  { code: 's1', name: 'Silver I', shortName: 'S1', tierColor: 0xcccccc, svgColor: '#bdbdbd', topPercent: 0.9700, iconFile: 's1.png' },
-  { code: 'b3', name: 'Bronze III', shortName: 'B3', tierColor: 0xcd7f32, svgColor: '#5d4037', topPercent: 0.9850, iconFile: 'b3.png' },
-  { code: 'b2', name: 'Bronze II', shortName: 'B2', tierColor: 0xcd7f32, svgColor: '#6d4c41', topPercent: 0.9950, iconFile: 'b2.png' },
-  { code: 'b1', name: 'Bronze I', shortName: 'B1', tierColor: 0xcd7f32, svgColor: '#795548', topPercent: 1.0000, iconFile: 'b1.png' },
+export const TRACKMANIA_RANKS: RankDefinition[] = [
+  { code: 'trackmaster', name: 'Trackmaster', shortName: 'TM', tierColor: 0x4b972a, svgColor: '#4b972a', topPercent: 0.0005, iconFile: 'tm.png' },
+  { code: 'master-3', name: 'Master 3', shortName: 'M3', tierColor: 0xc59514, svgColor: '#c59514', topPercent: 0.00425, iconFile: 'm3.png' },
+  { code: 'master-2', name: 'Master 2', shortName: 'M2', tierColor: 0x8e8c89, svgColor: '#8e8c89', topPercent: 0.0185, iconFile: 'm2.png' },
+  { code: 'master-1', name: 'Master 1', shortName: 'M1', tierColor: 0xa76935, svgColor: '#a76935', topPercent: 0.0525, iconFile: 'm1.png' },
+  { code: 'gold-3', name: 'Gold 3', shortName: 'G3', tierColor: 0xf9a825, svgColor: '#f9a825', topPercent: 0.12, iconFile: 'g3.png' },
+  { code: 'gold-2', name: 'Gold 2', shortName: 'G2', tierColor: 0xfbc02d, svgColor: '#fbc02d', topPercent: 0.24, iconFile: 'g2.png' },
+  { code: 'gold-1', name: 'Gold 1', shortName: 'G1', tierColor: 0xfdd835, svgColor: '#fdd835', topPercent: 0.415, iconFile: 'g1.png' },
+  { code: 'silver-3', name: 'Silver 3', shortName: 'S3', tierColor: 0x757575, svgColor: '#757575', topPercent: 0.605, iconFile: 's3.png' },
+  { code: 'silver-2', name: 'Silver 2', shortName: 'S2', tierColor: 0x9e9e9e, svgColor: '#9e9e9e', topPercent: 0.77, iconFile: 's2.png' },
+  { code: 'silver-1', name: 'Silver 1', shortName: 'S1', tierColor: 0xbdbdbd, svgColor: '#bdbdbd', topPercent: 0.885, iconFile: 's1.png' },
+  { code: 'bronze-3', name: 'Bronze 3', shortName: 'B3', tierColor: 0x5d4037, svgColor: '#5d4037', topPercent: 0.955, iconFile: 'b3.png' },
+  { code: 'bronze-2', name: 'Bronze 2', shortName: 'B2', tierColor: 0x6d4c41, svgColor: '#6d4c41', topPercent: 0.9875, iconFile: 'b2.png' },
+  { code: 'bronze-1', name: 'Bronze 1', shortName: 'B1', tierColor: 0x795548, svgColor: '#795548', topPercent: 1, iconFile: 'b1.png' },
 ];
 
 export interface PlayerRankTierInfo {
@@ -69,7 +38,7 @@ export interface PlayerRankTierInfo {
   division: number; // 1 to 4 (1 = lowest, 4 = highest)
   divisionRoman: string; // 'I', 'II', 'III', 'IV'
   topPercentage: number; // e.g. 3.42 (%)
-  fullName: string; // e.g. "Champion I Division III" or "Supersonic Legend"
+  fullName: string;
   iconPath: string; // Path to image file in images/
 }
 
@@ -99,7 +68,7 @@ export function getRankLeaderboardPositionRange(
   rankCode: string,
   totalPlayers: number,
 ): RankLeaderboardPositionRange {
-  const rankIndex = RL_RANKS.findIndex(rank => rank.code === rankCode);
+  const rankIndex = TRACKMANIA_RANKS.findIndex(rank => rank.code === rankCode);
   if (rankIndex < 0) {
     throw new Error(`Unknown competitive rank: ${rankCode}`);
   }
@@ -108,8 +77,8 @@ export function getRankLeaderboardPositionRange(
   }
   if (totalPlayers === 0) return { firstRank: 1, lastRank: 0 };
 
-  const upperPercent = rankIndex === 0 ? 0 : RL_RANKS[rankIndex - 1].topPercent;
-  const lowerPercent = RL_RANKS[rankIndex].topPercent;
+  const upperPercent = rankIndex === 0 ? 0 : TRACKMANIA_RANKS[rankIndex - 1].topPercent;
+  const lowerPercent = TRACKMANIA_RANKS[rankIndex].topPercent;
   return {
     firstRank: rankIndex === 0 ? 1 : Math.floor(upperPercent * totalPlayers) + 2,
     lastRank: Math.min(totalPlayers, Math.floor(lowerPercent * totalPlayers) + 1),
@@ -197,7 +166,7 @@ export function getRankDivisionRatingRangesFromRatings(
     return ratings[index];
   };
 
-  if (rank.code === 'ssl') {
+  if (rank.code === 'trackmaster') {
     const startRating = ratingAtPercentile(rank.topPercent);
     const endRating = ratings[0];
     return Array.from({ length: 4 }, (_, index) => ({
@@ -207,12 +176,12 @@ export function getRankDivisionRatingRangesFromRatings(
     }));
   }
 
-  const rankIndex = RL_RANKS.findIndex(rankDefinition => rankDefinition.code === rank.code);
+  const rankIndex = TRACKMANIA_RANKS.findIndex(rankDefinition => rankDefinition.code === rank.code);
   if (rankIndex < 0) {
     throw new Error(`Unknown competitive rank: ${rank.code}`);
   }
 
-  const upperPercentBound = rankIndex > 0 ? RL_RANKS[rankIndex - 1].topPercent : 0;
+  const upperPercentBound = rankIndex > 0 ? TRACKMANIA_RANKS[rankIndex - 1].topPercent : 0;
   const rankWidth = rank.topPercent - upperPercentBound;
 
   return Array.from({ length: 4 }, (_, index) => {
@@ -231,7 +200,7 @@ export async function getRankDivisionRatingRanges(
   totalPlayers?: number,
 ): Promise<RankDivisionRatingRange[]> {
   const players = await getActivePlayers();
-  const rank = RL_RANKS.find(rankDefinition => rankDefinition.code === rankCode);
+  const rank = TRACKMANIA_RANKS.find(rankDefinition => rankDefinition.code === rankCode);
   if (!rank) {
     throw new Error(`Unknown competitive rank: ${rankCode}`);
   }
@@ -258,7 +227,7 @@ export async function getPlayerTier(
   const total = totalPlayersCount ?? players.length;
 
   if (total === 0) {
-    const unranked = RL_RANKS[RL_RANKS.length - 1];
+    const unranked = TRACKMANIA_RANKS[TRACKMANIA_RANKS.length - 1];
     return {
       rank: unranked,
       division: 1,
@@ -290,22 +259,21 @@ export async function getPlayerTier(
   const topPercentage = (rankPosition / total) * 100;
 
   // 2. Identify the Rank
-  let currentRank = RL_RANKS[RL_RANKS.length - 1];
+  let currentRank = TRACKMANIA_RANKS[TRACKMANIA_RANKS.length - 1];
   let lowerPercentBound = 1.0;
   let upperPercentBound = 0.0;
 
-  for (let i = 0; i < RL_RANKS.length; i++) {
-    const r = RL_RANKS[i];
+  for (let i = 0; i < TRACKMANIA_RANKS.length; i++) {
+    const r = TRACKMANIA_RANKS[i];
     if (percentile <= r.topPercent) {
       currentRank = r;
-      upperPercentBound = i > 0 ? RL_RANKS[i - 1].topPercent : 0.0;
+      upperPercentBound = i > 0 ? TRACKMANIA_RANKS[i - 1].topPercent : 0.0;
       lowerPercentBound = r.topPercent;
       break;
     }
   }
 
-  // SSL does not have divisions in Rocket League
-  if (currentRank.code === 'ssl') {
+  if (currentRank.code === 'trackmaster') {
     return {
       rank: currentRank,
       division: 1,
@@ -341,7 +309,7 @@ export function getNextRankGoal(
   total: number,
   tierInfo: PlayerRankTierInfo,
 ): NextRankGoal | null {
-  if (tierInfo.rank.code === 'ssl') {
+  if (tierInfo.rank.code === 'trackmaster') {
     if (rank === 1) return null;
 
     const goalRank = rank <= 10 ? rank - 1 : Math.floor((rank - 1) / 10) * 10;
@@ -351,12 +319,12 @@ export function getNextRankGoal(
     };
   }
 
-  const rankIndex = RL_RANKS.findIndex(rankDefinition => rankDefinition.code === tierInfo.rank.code);
+  const rankIndex = TRACKMANIA_RANKS.findIndex(rankDefinition => rankDefinition.code === tierInfo.rank.code);
   if (rankIndex < 0) {
     throw new Error(`Unknown competitive rank: ${tierInfo.rank.code}`);
   }
 
-  const upperPercentBound = rankIndex > 0 ? RL_RANKS[rankIndex - 1].topPercent : 0;
+  const upperPercentBound = rankIndex > 0 ? TRACKMANIA_RANKS[rankIndex - 1].topPercent : 0;
   const lowerPercentBound = tierInfo.rank.topPercent;
   const rankWidth = lowerPercentBound - upperPercentBound;
 
@@ -370,7 +338,7 @@ export function getNextRankGoal(
     };
   }
 
-  const nextRank = RL_RANKS[rankIndex - 1];
+  const nextRank = TRACKMANIA_RANKS[rankIndex - 1];
   if (!nextRank) {
     throw new Error(`No higher rank exists above ${tierInfo.rank.name}.`);
   }
@@ -408,12 +376,12 @@ export async function getRankThresholdBands(): Promise<RankThresholdBand[]> {
 
   const targetIndices: number[] = [0];
   let prevIdx = -1;
-  for (let i = 0; i < RL_RANKS.length; i++) {
-    const targetIdx = i === RL_RANKS.length - 1
+  for (let i = 0; i < TRACKMANIA_RANKS.length; i++) {
+    const targetIdx = i === TRACKMANIA_RANKS.length - 1
       ? totalPlayers - 1
       : Math.min(
         totalPlayers - 1,
-        Math.max(prevIdx + 1, Math.floor(totalPlayers * RL_RANKS[i].topPercent))
+        Math.max(prevIdx + 1, Math.floor(totalPlayers * TRACKMANIA_RANKS[i].topPercent))
       );
     targetIndices.push(targetIdx);
     prevIdx = targetIdx;
@@ -448,8 +416,8 @@ export async function getRankThresholdBands(): Promise<RankThresholdBand[]> {
 
   const bands: RankThresholdBand[] = [];
   let prevRating = firstRating + 50;
-  for (let i = 0; i < RL_RANKS.length; i++) {
-    const rank = RL_RANKS[i];
+  for (let i = 0; i < TRACKMANIA_RANKS.length; i++) {
+    const rank = TRACKMANIA_RANKS[i];
     const targetIdx = targetIndices[i + 1];
     const cutoffRating = ratingByIndex.get(targetIdx);
     if (cutoffRating === undefined) {

@@ -20,7 +20,7 @@ export function getPlayerCardSegmentProgress(
   division: number,
   range: RankDivisionRatingRange,
 ): number {
-  if (rankCode === 'ssl') {
+  if (rankCode === 'trackmaster') {
     if (rating >= range.endRating) return 1;
     if (rating <= range.startRating) return 0;
     const ratingRange = range.endRating - range.startRating;
@@ -87,7 +87,7 @@ export function renderPlayerCard(data: PlayerCardData): Buffer {
       <text x="${x}" y="${segmentY + 68}" fill="#727d8c" font-size="12" font-family="monospace">${formatRating(range.startRating)}–${formatRating(range.endRating)}</text>
     `;
   };
-  const segments = data.tier.rank.code === 'ssl'
+  const segments = data.tier.rank.code === 'trackmaster'
     ? (() => {
       const firstRange = data.divisionRanges[0];
       const lastRange = data.divisionRanges[data.divisionRanges.length - 1];
@@ -101,8 +101,8 @@ export function renderPlayerCard(data: PlayerCardData): Buffer {
         range,
         segmentStartX,
         width - segmentStartX * 2,
-        getPlayerCardSegmentProgress(data.rating, 'ssl', 1, range),
-        'SSL ENTRY',
+        getPlayerCardSegmentProgress(data.rating, 'trackmaster', 1, range),
+        'TM ENTRY',
         '#1',
       );
     })()
@@ -124,13 +124,13 @@ export function renderPlayerCard(data: PlayerCardData): Buffer {
       );
     }).join('');
 
-  const progressLabel = data.tier.rank.code === 'ssl'
-    ? 'SSL progress · entry rating to #1'
+  const progressLabel = data.tier.rank.code === 'trackmaster'
+    ? 'Trackmaster progress · entry rating to #1'
     : `${data.tier.rank.shortName} division progress`;
   const iconMarkup = rankIcon
     ? `<image x="866" y="35" width="76" height="76" href="${rankIcon}" preserveAspectRatio="xMidYMid meet" />`
     : '';
-  const topRightText = data.tier.rank.code === 'ssl' && data.rank === 1
+  const topRightText = data.tier.rank.code === 'trackmaster' && data.rank === 1
     ? '#1'
     : `#${data.rank} / ${data.total}`;
   const latestChangeColor = data.latestChange.startsWith('-') ? '#ff6b6b' : '#55d6a2';

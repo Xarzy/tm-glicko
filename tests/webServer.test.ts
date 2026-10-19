@@ -26,19 +26,19 @@ const cotdDay: SelectCotdDay = {
 };
 const tier = {
   rank: {
-    code: 'gc1',
-    name: 'Grand Champion I',
-    shortName: 'GC1',
-    tierColor: 0xda291c,
-    svgColor: '#d32f2f',
-    topPercent: 0.012,
-    iconFile: 'gc1.png',
+    code: 'master-1',
+    name: 'Master 1',
+    shortName: 'M1',
+    tierColor: 0x0099ff,
+    svgColor: '#039be5',
+    topPercent: 4 / 13,
+    iconFile: 'm1.png',
   },
   division: 3,
   divisionRoman: 'III',
   topPercentage: 0.5,
-  fullName: 'Grand Champion I Division III',
-  iconPath: 'images/gc1.png',
+  fullName: 'Master 1 Division III',
+  iconPath: 'images/m1.png',
 };
 const state: SelectPlayerRatingState = {
   accountId,
@@ -88,7 +88,7 @@ const leaderboardEntry: WebsiteLeaderboardEntry = {
 
 function createDataSource(overrides: Partial<WebsiteDataSource> = {}): WebsiteDataSource {
   return {
-    rankOptions: [{ code: 'gc1', label: 'Grand Champion I' }],
+    rankOptions: [{ code: 'master-1', label: 'Master 1' }],
     findAccountIdByUsername: async username => username === 'Player' ? accountId : null,
     getDisplayNames: async () => new Map(),
     getLeaderboardPage: async () => ({ entries: [leaderboardEntry], total: 1 }),
@@ -155,10 +155,10 @@ test('serves a searchable, paginated leaderboard and recent COTDs', async () => 
     expect(await navigationScript.text()).toContain('Loading page');
     expect(html).toContain('<script src="/assets/site.js" defer=""></script>');
 
-    const secondPage = await fetch(`${baseUrl}/leaderboard?page=2&tier=gc1`);
+    const secondPage = await fetch(`${baseUrl}/leaderboard?page=2&tier=master-1`);
     expect(secondPage.status).toBe(200);
     expect(requestedPage).toBe(2);
-    expect(requestedTier).toBe('gc1');
+    expect(requestedTier).toBe('master-1');
   });
 });
 
@@ -200,7 +200,7 @@ test('renders ranked shareable profiles with rating history and placements', asy
     expect(html).toContain('Leaderboard rank');
     expect(html).toContain('Eligible-era peak');
     expect(html).toContain('Rating history');
-    expect(html).toContain('>GC1</text>');
+    expect(html).toContain('>M1</text>');
     expect(html).toContain('+25.5');
     expect(html).toContain('Division 2');
     expect(html).toContain('placement #12');
@@ -316,7 +316,7 @@ test('escapes HTML and shows rating changes on hover without adding visible poin
   expect(chart).toContain('1,500');
   expect(chart).toContain('<title>2026-01-02 · Final &amp; &lt;unsafe&gt; · rating 1,500 · change +100.0</title>');
   expect(chart).toContain('fill="transparent" pointer-events="all"');
-  expect(chart).toContain('>GC1</text>');
+  expect(chart).toContain('>M1</text>');
   expect(chart).not.toContain('fill="#45c9b5" stroke="#10151e"');
   expect(chart).not.toContain('Every result');
   expect(chart).not.toContain('<script>');

@@ -161,6 +161,11 @@ attempt, using exponential backoff; the final failure is logged and rethrown.
 
 ## Rating model
 
+Competitive tiers use Bronze, Silver, Gold, and Master (each with ranks 1–3),
+followed by Trackmaster. Their cumulative percentile cutoffs are scaled across
+the existing Rocket League distribution to fit the 13 ranks; each tier has four
+divisions except Trackmaster.
+
 Qualifying is rated as one calibrated Glicko-2 tournament period. The
 leaderboard is represented by rank-quantile opponents covering the whole field,
 with continuous placement outcomes: finishing ahead is always at least a draw,

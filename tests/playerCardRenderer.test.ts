@@ -3,7 +3,7 @@ import { expect, test } from 'bun:test';
 import { getPlayerCardSegmentProgress, renderPlayerCard } from '../src/services/playerCardRenderer';
 import type { PlayerCardData } from '../src/services/playerCardRenderer';
 
-const sslRanges = [
+const topRankRanges = [
   { division: 1, startRating: 0, endRating: 100 },
   { division: 2, startRating: 100, endRating: 200 },
   { division: 3, startRating: 200, endRating: 300 },
@@ -20,19 +20,19 @@ function createCardData(overrides: Partial<PlayerCardData> = {}): PlayerCardData
     peakRating: 1600,
     tier: {
       rank: {
-        code: 'gc1',
-        name: 'Grand Champion I',
-        shortName: 'GC1',
-        tierColor: 0xda291c,
-        svgColor: '#d32f2f',
-        topPercent: 0.012,
-        iconFile: 'gc1.png',
+        code: 'master-1',
+        name: 'Master 1',
+        shortName: 'M1',
+        tierColor: 0x0099ff,
+        svgColor: '#039be5',
+        topPercent: 4 / 13,
+        iconFile: 'm1.png',
       },
       division: 3,
       divisionRoman: 'III',
       topPercentage: 0.8,
-      fullName: 'Grand Champion I Division III',
-      iconPath: 'images/gc1.png',
+      fullName: 'Master 1 Division III',
+      iconPath: 'images/m1.png',
     },
     divisionRanges: [
       { division: 1, startRating: 1000, endRating: 1100 },
@@ -44,25 +44,25 @@ function createCardData(overrides: Partial<PlayerCardData> = {}): PlayerCardData
   };
 }
 
-test('SSL progress uses one continuous range from entry rating to #1', () => {
-  expect(getPlayerCardSegmentProgress(250, 'ssl', 1, {
+test('Trackmaster progress uses one continuous range from entry rating to #1', () => {
+  expect(getPlayerCardSegmentProgress(250, 'trackmaster', 1, {
     division: 1,
-    startRating: sslRanges[0].startRating,
-    endRating: sslRanges[sslRanges.length - 1].endRating,
+    startRating: topRankRanges[0].startRating,
+    endRating: topRankRanges[topRankRanges.length - 1].endRating,
   })).toBe(0.625);
 });
 
-test('SSL top player fills the progress bar to the #1 rating', () => {
-  expect(getPlayerCardSegmentProgress(400, 'ssl', 1, {
+test('Trackmaster top player fills the progress bar to the #1 rating', () => {
+  expect(getPlayerCardSegmentProgress(400, 'trackmaster', 1, {
     division: 1,
-    startRating: sslRanges[0].startRating,
-    endRating: sslRanges[sslRanges.length - 1].endRating,
+    startRating: topRankRanges[0].startRating,
+    endRating: topRankRanges[topRankRanges.length - 1].endRating,
   })).toBe(1);
 });
 
-test('non-SSL progress fills prior divisions and the current rating interval', () => {
-  expect(sslRanges.map(range =>
-    getPlayerCardSegmentProgress(250, 'gc1', 3, range)
+test('rank progress fills prior divisions and the current rating interval', () => {
+  expect(topRankRanges.map(range =>
+    getPlayerCardSegmentProgress(250, 'master-1', 3, range)
   )).toEqual([1, 1, 0.5, 0]);
 });
 
@@ -74,7 +74,7 @@ test('renders a compact PNG player card with rank styling', () => {
   expect(image.readUInt32BE(20)).toBe(528);
 });
 
-test('renders SSL progress through the top-player rating with positive changes', () => {
+test('renders Trackmaster progress through the top-player rating with positive changes', () => {
   const data = createCardData({
     rank: 1,
     rating: 1900,
@@ -83,12 +83,12 @@ test('renders SSL progress through the top-player rating with positive changes',
       ...createCardData().tier,
       rank: {
         ...createCardData().tier.rank,
-        code: 'ssl',
-        name: 'Supersonic Legend',
-        shortName: 'SSL',
-        iconFile: 'ssl.png',
+        code: 'trackmaster',
+        name: 'Trackmaster',
+        shortName: 'TM',
+        iconFile: 'tm.png',
       },
-      fullName: 'Supersonic Legend',
+      fullName: 'Trackmaster',
     },
     divisionRanges: [
       { division: 1, startRating: 1500, endRating: 1600 },
