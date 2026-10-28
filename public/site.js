@@ -24,7 +24,7 @@
     </div>`;
   }
 
-  async function navigate(url, push = true) {
+  async function navigate(url, push = true, reloadOnFailure = true) {
     activeRequest?.abort();
     const controller = new AbortController();
     activeRequest = controller;
@@ -57,7 +57,11 @@
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
-      window.location.assign(url.href);
+      if (reloadOnFailure) {
+        window.location.assign(url.href);
+      } else {
+        main.innerHTML = '<div role="alert"><h1>Unable to load this page</h1><p>Please refresh to try again.</p></div>';
+      }
     } finally {
       if (activeRequest === controller) {
         activeRequest = undefined;
@@ -91,4 +95,8 @@
   });
 
   window.addEventListener('popstate', () => navigate(new URL(window.location.href), false));
+
+  if (main.dataset.initialLoad === 'true') {
+    navigate(new URL(window.location.href), false, false);
+  }
 })();

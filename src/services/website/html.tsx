@@ -12,7 +12,15 @@ export function escapeHtml(value: string): string {
   })[character]!);
 }
 
-export function Layout({ title, children }: { title: string; children: ReactNode }) {
+export function Layout({
+  title,
+  children,
+  initialLoad = false,
+}: {
+  title: string;
+  children: ReactNode;
+  initialLoad?: boolean;
+}) {
   return <html lang="en">
     <head>
       <meta charSet="utf-8" />
@@ -30,7 +38,7 @@ export function Layout({ title, children }: { title: string; children: ReactNode
           <a href="/leaderboard">Leaderboard</a><a href="/cotd">COTDs</a>
         </nav>
       </header>
-      <main id="main-content" className="mx-auto w-[min(1100px,calc(100%-32px))] py-8 pb-14 max-[560px]:pt-6">
+      <main id="main-content" data-initial-load={initialLoad ? 'true' : undefined} className="mx-auto w-[min(1100px,calc(100%-32px))] py-8 pb-14 max-[560px]:pt-6">
         <div id="initial-loader" className="loading-page" role="status" aria-label="Loading page">
           <span className="sr-only">Loading page…</span>
           <span className="skeleton skeleton-heading" />
@@ -51,6 +59,18 @@ export function htmlResponse(title: string, content: ReactNode, status = 200): R
   const markup = '<!doctype html>' + renderToStaticMarkup(<Layout title={title}>{content}</Layout>);
   return new Response(markup, {
     status,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+    },
+  });
+}
+
+export function htmlLoadingResponse(title: string): Response {
+  const markup = '<!doctype html>' + renderToStaticMarkup(
+    <Layout title={title} initialLoad>{null}</Layout>,
+  );
+  return new Response(markup, {
     headers: {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',

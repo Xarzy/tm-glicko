@@ -1,12 +1,18 @@
 import { Hono } from 'hono';
 import { join } from 'node:path';
 import type { WebsiteDataSource } from '../websiteData';
-import { htmlResponse, Layout } from './html';
+import { htmlLoadingResponse, htmlResponse, Layout } from './html';
 import { renderLegalPage } from './legalPages';
 import { CotdList, renderCotdDetail, renderLeaderboard, renderPlayerProfile } from './pages';
 
 async function getDataSource(data?: WebsiteDataSource): Promise<WebsiteDataSource> {
   return data ?? (await import('../websiteData')).websiteData;
+}
+
+function initialPageResponse(request: Request, title: string): Response | null {
+  return request.headers.get('X-Requested-With') === 'TM-Glicko-Navigation'
+    ? null
+    : htmlLoadingResponse(title);
 }
 
 export function createWebsiteApp(data?: WebsiteDataSource) {
@@ -47,12 +53,16 @@ export function createWebsiteApp(data?: WebsiteDataSource) {
     });
   });
   app.on(['GET', 'HEAD'], '/', async context =>
-    renderLeaderboard(new URL(context.req.url), true, await getDataSource(data))
+    initialPageResponse(context.req.raw, 'Leaderboard')
+      ?? renderLeaderboard(new URL(context.req.url), true, await getDataSource(data))
   );
   app.on(['GET', 'HEAD'], '/leaderboard', async context =>
-    renderLeaderboard(new URL(context.req.url), false, await getDataSource(data))
+    initialPageResponse(context.req.raw, 'Leaderboard')
+      ?? renderLeaderboard(new URL(context.req.url), false, await getDataSource(data))
   );
   app.on(['GET', 'HEAD'], '/cotd', async context => {
+    const initialResponse = initialPageResponse(context.req.raw, 'Recent COTDs');
+    if (initialResponse) return initialResponse;
     const source = await getDataSource(data);
     return htmlResponse('Recent COTDs', <CotdList days={await source.getRecentProcessedCotdDays(50)} />);
   });
@@ -63,6 +73,8 @@ export function createWebsiteApp(data?: WebsiteDataSource) {
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(accountId)) {
       return htmlResponse('Not found', <><h1>Page not found</h1><p><a href="/">Go to the leaderboard</a></p></>, 404);
     }
+    const initialResponse = initialPageResponse(context.req.raw, 'Player profile');
+    if (initialResponse) return initialResponse;
     const source = await getDataSource(data);
     return renderPlayerProfile(await source.getPlayerProfile(accountId), accountId);
   });
@@ -75,6 +87,8 @@ export function createWebsiteApp(data?: WebsiteDataSource) {
     if (!Number.isSafeInteger(cupId) || cupId < 1) {
       return htmlResponse('Invalid COTD', <h1>Invalid COTD ID</h1>, 400);
     }
+    const initialResponse = initialPageResponse(context.req.raw, 'COTD results');
+    if (initialResponse) return initialResponse;
     const source = await getDataSource(data);
     return renderCotdDetail(await source.getCotdDetail(cupId));
   });

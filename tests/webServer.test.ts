@@ -114,6 +114,12 @@ async function withServer(
   }
 }
 
+function fetchPage(url: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  headers.set('X-Requested-With', 'TM-Glicko-Navigation');
+  return fetch(url, { ...init, headers });
+}
+
 test('serves a searchable, paginated leaderboard and recent COTDs', async () => {
   let requestedPage = 0;
   let requestedTier = '';
@@ -126,7 +132,14 @@ test('serves a searchable, paginated leaderboard and recent COTDs', async () => 
   });
 
   await withServer(data, async baseUrl => {
-    const response = await fetch(baseUrl);
+    const initialResponse = await fetch(baseUrl);
+    const initialHtml = await initialResponse.text();
+    expect(initialResponse.status).toBe(200);
+    expect(initialHtml).toContain('data-initial-load="true"');
+    expect(initialHtml).toContain('id="initial-loader"');
+    expect(initialHtml).not.toContain('Glicko Leaderboard');
+
+    const response = await fetchPage(baseUrl);
     const html = await response.text();
 
     expect(response.status).toBe(200);
@@ -155,20 +168,74 @@ test('serves a searchable, paginated leaderboard and recent COTDs', async () => 
     expect(await navigationScript.text()).toContain('Loading page');
     expect(html).toContain('<script src="/assets/site.js" defer=""></script>');
 
-    const secondPage = await fetch(`${baseUrl}/leaderboard?page=2&tier=master-1`);
+    const secondPage = await fetchPage(`${baseUrl}/leaderboard?page=2&tier=master-1`);
     expect(secondPage.status).toBe(200);
     expect(requestedPage).toBe(2);
     expect(requestedTier).toBe('master-1');
   });
 });
 
+test('serves the page shell before waiting for leaderboard data', async () => {
+  let releaseLeaderboard!: () => void;
+  let startLeaderboard!: () => void;
+  let dataCalls = 0;
+  const leaderboardStarted = new Promise<void>(resolve => {
+    startLeaderboard = resolve;
+  });
+  const data = createDataSource({
+    getLeaderboardPage: async () => {
+      dataCalls += 1;
+      startLeaderboard();
+      await new Promise<void>(resolve => {
+        releaseLeaderboard = resolve;
+      });
+      return { entries: [leaderboardEntry], total: 1 };
+    },
+    getRecentProcessedCotdDays: async () => {
+      dataCalls += 1;
+      return [cotdDay];
+    },
+    getPlayerProfile: async () => {
+      dataCalls += 1;
+      return rankedProfile;
+    },
+    getCotdDetail: async () => {
+      dataCalls += 1;
+      return { day: cotdDay, results: [] };
+    },
+  });
+
+  await withServer(data, async baseUrl => {
+    for (const path of ['/', '/leaderboard', '/cotd', `/players/${accountId}`, `/cotd/${cotdDay.cupId}`]) {
+      const initial = await fetch(`${baseUrl}${path}`);
+      const initialHtml = await initial.text();
+      expect(initial.status).toBe(200);
+      expect(initialHtml).toContain('data-initial-load="true"');
+    }
+    expect(dataCalls).toBe(0);
+
+    let responseReady = false;
+    const pageContent = fetchPage(baseUrl)
+      .then(response => response.text())
+      .then(html => {
+        responseReady = true;
+        return html;
+      });
+    await leaderboardStarted;
+    expect(responseReady).toBe(false);
+
+    releaseLeaderboard();
+    expect(await pageContent).toContain('Glicko Leaderboard');
+  });
+});
+
 test('search redirects exact matches to shareable profiles and escapes misses', async () => {
   await withServer(createDataSource(), async baseUrl => {
-    const found = await fetch(`${baseUrl}/leaderboard?q=Player`, { redirect: 'manual' });
+    const found = await fetchPage(`${baseUrl}/leaderboard?q=Player`, { redirect: 'manual' });
     expect(found.status).toBe(302);
     expect(found.headers.get('location')).toContain(`/players/${accountId}`);
 
-    const missing = await fetch(`${baseUrl}/leaderboard?q=%3Cscript%3E`);
+    const missing = await fetchPage(`${baseUrl}/leaderboard?q=%3Cscript%3E`);
     const html = await missing.text();
     expect(missing.status).toBe(200);
     expect(html).toContain('&lt;script&gt;');
@@ -178,14 +245,14 @@ test('search redirects exact matches to shareable profiles and escapes misses', 
 
 test('rejects excessive search and invalid pagination before data access', async () => {
   await withServer(createDataSource(), async baseUrl => {
-    const tooLong = await fetch(`${baseUrl}/leaderboard?q=${'a'.repeat(65)}`);
+    const tooLong = await fetchPage(`${baseUrl}/leaderboard?q=${'a'.repeat(65)}`);
     expect(tooLong.status).toBe(400);
 
-    const invalidPage = await fetch(`${baseUrl}/leaderboard?page=0`);
+    const invalidPage = await fetchPage(`${baseUrl}/leaderboard?page=0`);
     expect(invalidPage.status).toBe(400);
     expect(await invalidPage.text()).toContain('Invalid page');
 
-    const invalidTier = await fetch(`${baseUrl}/leaderboard?tier=unknown`);
+    const invalidTier = await fetchPage(`${baseUrl}/leaderboard?tier=unknown`);
     expect(invalidTier.status).toBe(400);
     expect(await invalidTier.text()).toContain('Invalid rank filter');
   });
@@ -193,7 +260,7 @@ test('rejects excessive search and invalid pagination before data access', async
 
 test('renders ranked shareable profiles with rating history and placements', async () => {
   await withServer(createDataSource(), async baseUrl => {
-    const response = await fetch(`${baseUrl}/players/${accountId}`);
+    const response = await fetchPage(`${baseUrl}/players/${accountId}`);
     const html = await response.text();
 
     expect(response.status).toBe(200);
@@ -216,11 +283,11 @@ test('explains ineligible players and reports unknown player profiles', async ()
       : null,
   });
   await withServer(data, async baseUrl => {
-    const unranked = await fetch(`${baseUrl}/players/unranked`);
+    const unranked = await fetchPage(`${baseUrl}/players/unranked`);
     expect(unranked.status).toBe(404);
     expect(await unranked.text()).toContain('completing 10 COTDs');
 
-    const missing = await fetch(`${baseUrl}/players/unknown`);
+    const missing = await fetchPage(`${baseUrl}/players/unknown`);
     expect(missing.status).toBe(404);
     expect(await missing.text()).toContain('Player not found');
   });
@@ -228,10 +295,10 @@ test('explains ineligible players and reports unknown player profiles', async ()
 
 test('lists recent COTDs and renders their placements', async () => {
   await withServer(createDataSource(), async baseUrl => {
-    const list = await fetch(`${baseUrl}/cotd`);
+    const list = await fetchPage(`${baseUrl}/cotd`);
     expect(await list.text()).toContain(`/cotd/${cotdDay.cupId}`);
 
-    const detail = await fetch(`${baseUrl}/cotd/${cotdDay.cupId}`);
+    const detail = await fetchPage(`${baseUrl}/cotd/${cotdDay.cupId}`);
     const html = await detail.text();
     expect(detail.status).toBe(200);
     expect(html).toContain('Placement');
@@ -245,7 +312,7 @@ test('displays when a COTD has no stored placement data', async () => {
   await withServer(createDataSource({
     getCotdDetail: async () => ({ day: cotdDay, results: [] }),
   }), async baseUrl => {
-    const response = await fetch(`${baseUrl}/cotd/${cotdDay.cupId}`);
+    const response = await fetchPage(`${baseUrl}/cotd/${cotdDay.cupId}`);
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('Placement data is unavailable');
   });
@@ -255,7 +322,7 @@ test('handles missing COTDs, invalid IDs, health checks, and unsupported methods
   await withServer(createDataSource({
     getCotdDetail: async () => null,
   }), async baseUrl => {
-    const missing = await fetch(`${baseUrl}/cotd/20261015`);
+    const missing = await fetchPage(`${baseUrl}/cotd/20261015`);
     expect(missing.status).toBe(404);
 
     const invalid = await fetch(`${baseUrl}/cotd/0`);
@@ -277,7 +344,7 @@ test('handles missing COTDs, invalid IDs, health checks, and unsupported methods
 
 test('serves linked terms of service and privacy policy pages', async () => {
   await withServer(createDataSource(), async baseUrl => {
-    const home = await fetch(baseUrl);
+    const home = await fetchPage(baseUrl);
     const homeHtml = await home.text();
     expect(homeHtml).toContain('href="/terms">Terms of Service</a>');
     expect(homeHtml).toContain('href="/privacy">Privacy Policy</a>');
@@ -324,7 +391,7 @@ test('escapes HTML and shows rating changes on hover without adding visible poin
 
 test('web server binds to an ephemeral port and answers requests', async () => {
   await withServer(createDataSource(), async baseUrl => {
-    const response = await fetch(baseUrl);
+    const response = await fetchPage(baseUrl);
     expect(response.status).toBe(200);
   });
 });
