@@ -153,7 +153,7 @@ export async function executePlayerRatingLookup(
     .setTitle(requestedRank === null ? `${username} Rating Info` : `Rank ${rank} (${username}) Rating Info`)
     .addFields(
       {
-        name: 'Competitive Rank',
+        name: 'COTD Rank',
         value: `**${tierInfo.fullName}** (Top ${formatTopPercentage(tierInfo.topPercentage)}%)`,
         inline: false,
       },
@@ -166,7 +166,7 @@ export async function executePlayerRatingLookup(
       },
       ...(nextGoalField ? [nextGoalField] : []),
       {
-        name: 'Glicko-2 Rating',
+        name: 'COTD Glicko-2 Rating',
         value: `${Math.round(state.rating)}`,
         inline: true,
       },
@@ -181,7 +181,7 @@ export async function executePlayerRatingLookup(
         inline: false,
       },
       {
-        name: 'Match Count',
+        name: 'COTDs Played',
         value: `${state.matchCount}`,
         inline: true,
       },
