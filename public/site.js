@@ -11,6 +11,29 @@
 
   let activeRequest;
 
+  async function copyPageLink(button) {
+    const label = button.querySelector('[data-copy-page-label]');
+    const status = button.parentElement?.querySelector('[data-copy-page-status]');
+    if (!(label instanceof HTMLElement) || !(status instanceof HTMLElement)) return;
+
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable.');
+      await navigator.clipboard.writeText(window.location.href);
+      label.textContent = 'Copied!';
+      status.textContent = 'Profile link copied to clipboard.';
+      button.dataset.copyState = 'copied';
+    } catch {
+      label.textContent = 'Copy failed';
+      status.textContent = 'Could not copy the link. Copy it from your browser address bar.';
+      button.dataset.copyState = 'error';
+    }
+
+    window.setTimeout(() => {
+      label.textContent = 'Share profile';
+      button.dataset.copyState = '';
+    }, 2500);
+  }
+
   function loadingMarkup(pathname) {
     const playerPage = pathname.startsWith('/players/');
     const cotdPage = pathname.startsWith('/cotd/');
@@ -24,16 +47,28 @@
     </div>`;
   }
 
-  async function navigate(url, push = true, reloadOnFailure = true) {
+  async function navigate(url, push = true, reloadOnFailure = true, paginationTarget, requestUrl = url) {
     activeRequest?.abort();
     const controller = new AbortController();
     activeRequest = controller;
-    document.body.dataset.loading = 'true';
-    main.setAttribute('aria-busy', 'true');
-    main.innerHTML = loadingMarkup(url.pathname);
+    const currentTarget = paginationTarget
+      ? main.querySelector(`[data-pagination-content="${paginationTarget}"]`)
+      : null;
+    if (paginationTarget && !currentTarget) {
+      if (reloadOnFailure) window.location.assign(url.href);
+      return;
+    }
+
+    if (currentTarget) {
+      currentTarget.setAttribute('aria-busy', 'true');
+    } else {
+      document.body.dataset.loading = 'true';
+      main.setAttribute('aria-busy', 'true');
+      main.innerHTML = loadingMarkup(url.pathname);
+    }
 
     try {
-      const response = await fetch(url, {
+      const response = await fetch(requestUrl, {
         headers: { Accept: 'text/html', 'X-Requested-With': 'TM-Glicko-Navigation' },
         signal: controller.signal,
       });
@@ -45,16 +80,35 @@
       const nextContent = nextDocument.querySelector('#page-content');
       if (!nextContent) throw new Error('The requested page did not contain its main content.');
 
-      main.innerHTML = nextContent.innerHTML;
-      main.classList.remove('page-enter');
-      void main.offsetWidth;
-      main.classList.add('page-enter');
+      if (currentTarget) {
+        const nextTarget = nextContent.querySelector(`[data-pagination-content="${paginationTarget}"]`);
+        if (!nextTarget) throw new Error('The requested page did not contain the paginated results.');
+        currentTarget.replaceWith(nextTarget);
+      } else {
+        main.innerHTML = nextContent.innerHTML;
+        main.classList.remove('page-enter');
+        void main.offsetWidth;
+        main.classList.add('page-enter');
+      }
       main.removeAttribute('aria-busy');
-      document.title = nextDocument.title;
+      if (!currentTarget) document.title = nextDocument.title;
 
-      const destination = new URL(response.url);
-      if (push) history.pushState({}, '', destination);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      if (push && currentTarget) {
+        const currentFetchUrl = currentTarget
+          .querySelector('.pagination')
+          ?.dataset.paginationFetchCurrent;
+        history.replaceState({
+          paginationTarget,
+          paginationFetchUrl: currentFetchUrl || window.location.href,
+        }, '', window.location.href);
+      }
+      if (push) {
+        history.pushState({
+          paginationTarget,
+          paginationFetchUrl: requestUrl.href,
+        }, '', url);
+      }
+      if (!currentTarget) window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
       if (reloadOnFailure) {
@@ -65,7 +119,8 @@
     } finally {
       if (activeRequest === controller) {
         activeRequest = undefined;
-        delete document.body.dataset.loading;
+        if (!currentTarget) delete document.body.dataset.loading;
+        currentTarget?.removeAttribute('aria-busy');
         main.removeAttribute('aria-busy');
       }
     }
@@ -74,12 +129,21 @@
   document.addEventListener('click', event => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     if (!(event.target instanceof Element)) return;
+    const copyButton = event.target.closest('button[data-copy-page-link]');
+    if (copyButton instanceof HTMLButtonElement) {
+      event.preventDefault();
+      void copyPageLink(copyButton);
+      return;
+    }
     const link = event.target.closest('a[href]');
     if (!link || link.target || link.hasAttribute('download')) return;
     const url = new URL(link.href, window.location.href);
     if (url.origin !== window.location.origin || url.pathname.startsWith('/assets/') || url.pathname === '/health') return;
     event.preventDefault();
-    navigate(url);
+    const requestUrl = link.dataset.paginationFetchUrl
+      ? new URL(link.dataset.paginationFetchUrl, window.location.href)
+      : url;
+    navigate(url, true, true, link.dataset.paginationTarget, requestUrl);
   });
 
   document.addEventListener('submit', event => {
@@ -94,7 +158,18 @@
     navigate(url);
   });
 
-  window.addEventListener('popstate', () => navigate(new URL(window.location.href), false));
+  window.addEventListener('popstate', event => {
+    const requestUrl = event.state?.paginationFetchUrl
+      ? new URL(event.state.paginationFetchUrl, window.location.href)
+      : new URL(window.location.href);
+    navigate(
+      new URL(window.location.href),
+      false,
+      true,
+      event.state?.paginationTarget,
+      requestUrl,
+    );
+  });
 
   if (main.dataset.initialLoad === 'true') {
     navigate(new URL(window.location.href), false, false);

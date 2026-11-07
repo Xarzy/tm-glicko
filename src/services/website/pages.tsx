@@ -4,13 +4,57 @@ import type { SelectCotdDay } from '../../db/schema';
 import type {
   WebsiteCotdResult,
   WebsiteDataSource,
+  WebsitePlayerCotdResult,
   WebsitePlayerHistoryPoint,
+  WebsitePlayerCotdPage,
   WebsitePlayerProfile,
 } from '../websiteData';
-import type { RankThresholdBand } from '../rankService';
+import { TRACKMANIA_RANKS, type RankThresholdBand } from '../rankService';
 import { formatRating, htmlResponse } from './html';
+import { timeWebStage } from './timing';
 
 const PAGE_SIZE = 25;
+export const DUEL_PAGE_SIZE = 20;
+export const PLAYER_COTD_PAGE_SIZE = 10;
+
+export function parsePaginationPage(url: URL): number | null {
+  const rawPage = url.searchParams.get('page') ?? '1';
+  if (!/^\d+$/.test(rawPage)) return null;
+  const page = Number(rawPage);
+  return Number.isSafeInteger(page) && page >= 1 && page <= 1_000_000 ? page : null;
+}
+
+function Pagination({
+  page,
+  total,
+  pageSize,
+  target,
+  href,
+  fetchHref,
+}: {
+  page: number;
+  total: number;
+  pageSize: number;
+  target: string;
+  href(page: number): string;
+  fetchHref?(page: number): string;
+}) {
+  const pageCount = Math.ceil(total / pageSize);
+  if (pageCount <= 1) return null;
+
+  return <nav className="pagination" aria-label="Pagination" data-pagination-target={target}
+    data-pagination-fetch-current={fetchHref?.(page)}>
+    {page > 1
+      ? <a rel="prev" href={href(page - 1)} data-pagination-target={target}
+        data-pagination-fetch-url={fetchHref?.(page - 1)}>← Previous</a>
+      : <span />}
+    <span className="muted">Page {page} of {pageCount}</span>
+    {page < pageCount
+      ? <a rel="next" href={href(page + 1)} data-pagination-target={target}
+        data-pagination-fetch-url={fetchHref?.(page + 1)}>Next →</a>
+      : <span />}
+  </nav>;
+}
 
 function SearchForm({
   rankOptions,
@@ -44,7 +88,10 @@ export async function renderLeaderboard(
   }
 
   if (query) {
-    const accountId = await data.findAccountIdByUsername(query);
+    const accountId = await timeWebStage(
+      'leaderboard username search',
+      () => data.findAccountIdByUsername(query),
+    );
     if (!accountId) {
       return htmlResponse('Leaderboard', <>
         <h1>Player not found</h1>
@@ -59,7 +106,13 @@ export async function renderLeaderboard(
   if (!Number.isInteger(page) || page < 1 || page > 1_000_000) {
     return htmlResponse('Leaderboard', <><h1>Invalid page</h1><p>Page must be a positive integer.</p></>, 400);
   }
-  const { entries, total } = await data.getLeaderboardPage(page, PAGE_SIZE, selectedTier || undefined);
+  const { entries, total } = await timeWebStage(
+    'leaderboard data load',
+    () => data.getLeaderboardPage(page, PAGE_SIZE, selectedTier || undefined),
+  );
+  const recentCotds = showRecentCotds
+    ? await timeWebStage('recent COTD query', () => data.getRecentProcessedCotdDays(10))
+    : null;
   const content = <>
     <h1>Glicko Leaderboard</h1>
     <p className="intro">COTD qualifying ratings for eligible players, ordered by rating.</p>
@@ -89,9 +142,152 @@ export async function renderLeaderboard(
         {page * PAGE_SIZE < total && <a className="ml-4" href={`/leaderboard?page=${page + 1}${selectedTier ? `&tier=${encodeURIComponent(selectedTier)}` : ''}`}>Next →</a>}
       </span>
     </div>}
-    {showRecentCotds && <CotdList days={await data.getRecentProcessedCotdDays(10)} compact />}
+    {recentCotds && <CotdList days={recentCotds} compact />}
   </>;
   return htmlResponse('Leaderboard', content);
+}
+
+export async function renderDuel(url: URL, data: WebsiteDataSource): Promise<Response> {
+  const firstName = (url.searchParams.get('player1') ?? '').trim();
+  const secondName = (url.searchParams.get('player2') ?? '').trim();
+  const page = parsePaginationPage(url);
+  if (page === null) {
+    return htmlResponse('Player duel', <><h1>Invalid page</h1><p>Page must be a positive integer.</p></>, 400);
+  }
+  if (firstName.length > 64 || secondName.length > 64) {
+    return htmlResponse('Player duel', <><h1>Player name is too long</h1><p>Names must be 64 characters or fewer.</p></>, 400);
+  }
+
+  const form = <form className="duel-form panel" action="/duel" method="get">
+    <div className="duel-form-heading">
+      <span className="duel-eyebrow">SET UP A MATCHUP</span>
+      <h2>Choose your players</h2>
+      <p>Enter both Trackmania usernames to see who leads on shared Cups of the Day.</p>
+    </div>
+    <div className="duel-fields">
+      <label className="duel-field" htmlFor="duel-player1">
+        <span><span className="duel-player-dot duel-player-dot-first" />First player</span>
+        <input id="duel-player1" name="player1" type="text" autoComplete="off" maxLength={64}
+          required defaultValue={firstName} placeholder="Exact Trackmania username" />
+      </label>
+      <span className="duel-form-vs" aria-hidden="true">VS</span>
+      <label className="duel-field" htmlFor="duel-player2">
+        <span><span className="duel-player-dot duel-player-dot-second" />Second player</span>
+        <input id="duel-player2" name="player2" type="text" autoComplete="off" maxLength={64}
+          required defaultValue={secondName} placeholder="Exact Trackmania username" />
+      </label>
+    </div>
+    <button className="duel-submit" type="submit">Compare players <span aria-hidden="true">→</span></button>
+  </form>;
+
+  if (!firstName || !secondName) {
+    return htmlResponse('Player duel', <>
+      <div className="duel-hero">
+        <span className="duel-eyebrow">TRACKMANIA · HEAD-TO-HEAD</span>
+        <h1>Settle it on the track.</h1>
+        <p className="intro">Compare two players and see who comes out ahead on the Cups of the Day they raced together.</p>
+      </div>
+      {form}
+    </>);
+  }
+
+  const [firstAccountId, secondAccountId] = await Promise.all([
+    data.findAccountIdByUsername(firstName),
+    data.findAccountIdByUsername(secondName),
+  ]);
+  if (!firstAccountId || !secondAccountId) {
+    const missingName = !firstAccountId ? firstName : secondName;
+    return htmlResponse('Player duel', <>
+      <div className="duel-hero">
+        <span className="duel-eyebrow">TRACKMANIA · HEAD-TO-HEAD</span>
+        <h1>Settle it on the track.</h1>
+        <p className="intro">Compare two players and see who comes out ahead on the Cups of the Day they raced together.</p>
+      </div>
+      {form}
+      <p className="duel-error" role="status">No exact Trackmania username match for “{missingName}”. Check the spelling and try again.</p>
+    </>);
+  }
+  if (firstAccountId === secondAccountId) {
+    return htmlResponse('Player duel', <>
+      <div className="duel-hero">
+        <span className="duel-eyebrow">TRACKMANIA · HEAD-TO-HEAD</span>
+        <h1>Settle it on the track.</h1>
+        <p className="intro">Compare two players and see who comes out ahead on the Cups of the Day they raced together.</p>
+      </div>
+      {form}
+      <p className="duel-error" role="status">Choose two different players to start a duel.</p>
+    </>);
+  }
+
+  const [duel, names] = await Promise.all([
+    timeWebStage('player duel shared COTD results', () =>
+      data.getDuelCupResults(firstAccountId, secondAccountId, page, DUEL_PAGE_SIZE)),
+    data.getDisplayNames([firstAccountId, secondAccountId]),
+  ]);
+  const firstUsername = names.get(firstAccountId) ?? firstName;
+  const secondUsername = names.get(secondAccountId) ?? secondName;
+  const pageCount = Math.ceil(duel.total / DUEL_PAGE_SIZE);
+  if (pageCount > 0 && page > pageCount) {
+    const redirectUrl = new URL(url);
+    redirectUrl.searchParams.set('page', String(pageCount));
+    return Response.redirect(redirectUrl, 302);
+  }
+  return htmlResponse(`${firstUsername} vs ${secondUsername}`, <>
+    <p className="muted"><a href="/duel">← New matchup</a></p>
+    <div className="duel-hero">
+      <span className="duel-eyebrow">HEAD-TO-HEAD</span>
+      <h1>{firstUsername} <span className="duel-title-vs">vs</span> {secondUsername}</h1>
+      <p className="intro">Who took the most shared Cups of the Day?</p>
+    </div>
+    <section className="duel-scoreboard" aria-label="Head-to-head record">
+      <div className="duel-contender duel-contender-first">
+        <span className="duel-contender-label">PLAYER 1</span>
+        <strong>{firstUsername}</strong>
+        <span className="duel-win-count">{duel.firstWins} <span>wins</span></span>
+      </div>
+      <div className="duel-score-center">
+        <span className="duel-score">{duel.firstWins} <span>–</span> {duel.secondWins}</span>
+        <span className="duel-score-caption">CUP WINS</span>
+      </div>
+      <div className="duel-contender duel-contender-second">
+        <span className="duel-contender-label">PLAYER 2</span>
+        <strong>{secondUsername}</strong>
+        <span className="duel-win-count">{duel.secondWins} <span>wins</span></span>
+      </div>
+      <div className="duel-summary">
+        <span>{duel.total.toLocaleString('en-US')} shared {duel.total === 1 ? 'cup' : 'cups'}</span>
+        {duel.draws > 0 && <span>{duel.draws} tied {duel.draws === 1 ? 'cup' : 'cups'}</span>}
+      </div>
+    </section>
+    {duel.total === 0
+      ? <p className="muted">These players have no Cups of the Day with recorded placements for both of them.</p>
+      : <section className="duel-results" data-pagination-content="duel-results">
+        <div className="duel-results-heading">
+          <div><h2>Cup-by-cup results</h2><p>Head-to-head placements on the same COTDs</p></div>
+          <span>{duel.total.toLocaleString('en-US')} shared cups</span>
+        </div>
+        <div className="table-wrap"><table><thead><tr>
+        <th>Cup</th><th>Date</th><th className="text-right">{firstUsername}</th><th className="text-right">{secondUsername}</th><th>Winner</th>
+      </tr></thead><tbody>
+        {duel.results.map(result => <tr key={result.cupId}>
+          <td><a href={`/cotd/${result.cupId}`}>{result.name}</a></td>
+          <td>{result.cotdDate}</td>
+          <td className="text-right">#{result.firstRank}</td>
+          <td className="text-right">#{result.secondRank}</td>
+          <td>{result.firstRank === result.secondRank
+            ? 'Tie'
+            : result.firstRank < result.secondRank ? firstUsername : secondUsername}</td>
+        </tr>)}
+      </tbody></table></div>
+      <Pagination page={page} total={duel.total} pageSize={DUEL_PAGE_SIZE}
+        target="duel-results"
+        href={nextPage => {
+          const nextUrl = new URL(url);
+          nextUrl.searchParams.set('page', String(nextPage));
+          return `${nextUrl.pathname}${nextUrl.search}`;
+        }} />
+      </section>}
+  </>);
 }
 
 export function CotdList({ days, compact = false }: { days: SelectCotdDay[]; compact?: boolean }) {
@@ -166,17 +362,99 @@ function RatingChart({ history, bands }: { history: WebsitePlayerHistoryPoint[];
   </svg></div>;
 }
 
-function PlayerCotdResults({ history }: { history: WebsitePlayerHistoryPoint[] }) {
-  if (history.length === 0) return <p className="muted">No recent results available.</p>;
-  return <ul className="list">{history.slice(-10).reverse().map(result =>
-    <li key={result.cupId}><a href={`/cotd/${result.cupId}`}>{result.name}</a>
-      <span className="muted"> · {result.cotdDate} · placement {result.rank === null ? 'unavailable ' : `#${result.rank} `} 
-      · rating {formatRating(result.rating)} {result.ratingChange !== null ? `(${result.ratingChange > 0 ? '+' : ''}${result.ratingChange.toFixed(1)})` : ''}</span>
-    </li>
-  )}</ul>;
+function PlayerCotdResults({
+  results,
+  page,
+  total,
+  accountId,
+  fetchHref,
+}: {
+  results: WebsitePlayerCotdResult[];
+  page: number;
+  total: number;
+  accountId: string;
+  fetchHref?(page: number): string;
+}) {
+  if (total === 0) return <p className="muted">No recent results available.</p>;
+  return <>
+    <ul className="list">{results.map(result =>
+      <li key={result.cupId}><a href={`/cotd/${result.cupId}`}>{result.name}</a>
+        <span className="muted"> · {result.cotdDate} · placement {result.rank === null ? 'unavailable' : `#${result.rank}`}
+          {' · rating '}{formatRating(result.rating)}{result.ratingChange === null ? '' : ` (${formatRatingChange(result.ratingChange)})`}</span>
+      </li>
+    )}</ul>
+    <Pagination page={page} total={total} pageSize={PLAYER_COTD_PAGE_SIZE} target="player-cotd-results"
+      href={nextPage => `/players/${encodeURIComponent(accountId)}?page=${nextPage}`}
+      fetchHref={fetchHref} />
+  </>;
 }
 
-export function renderPlayerProfile(profile: WebsitePlayerProfile | null, accountId: string): Response {
+function PlayerCotdResultsSection({
+  pageData,
+  page,
+  accountId,
+  fetchHref,
+}: {
+  pageData: WebsitePlayerCotdPage;
+  page: number;
+  accountId: string;
+  fetchHref?(page: number): string;
+}) {
+  return <section className="panel" data-pagination-content="player-cotd-results">
+    <h2>Recent COTD results</h2>
+    <PlayerCotdResults
+      results={pageData.results}
+      page={page}
+      total={pageData.total}
+      accountId={accountId}
+      fetchHref={fetchHref}
+    />
+  </section>;
+}
+
+export function renderPlayerCotdResultsFragment(
+  pageData: WebsitePlayerCotdPage,
+  accountId: string,
+  page: number,
+): Response {
+  const profilePath = `/players/${encodeURIComponent(accountId)}`;
+  const fragmentPath = `${profilePath}/cotd-results`;
+  return htmlResponse('Player COTD results', <PlayerCotdResultsSection
+    pageData={pageData}
+    page={page}
+    accountId={accountId}
+    fetchHref={nextPage => `${fragmentPath}?page=${nextPage}`}
+  />);
+}
+
+function getPlayerDivisionProgress(
+  rank: number,
+  total: number,
+  tier: Extract<WebsitePlayerProfile, { status: 'ranked' }>['tier'],
+): number {
+  if (tier.rank.code === 'trackmaster') {
+    const lastTrackmasterRank = Math.max(1, Math.floor(tier.rank.topPercent * total) + 1);
+    return lastTrackmasterRank === 1
+      ? 1
+      : Math.max(0, Math.min(1, (lastTrackmasterRank - rank) / (lastTrackmasterRank - 1)));
+  }
+
+  const rankIndex = TRACKMANIA_RANKS.findIndex(rankDefinition => rankDefinition.code === tier.rank.code);
+  if (rankIndex < 0) throw new Error(`Unknown competitive rank: ${tier.rank.code}`);
+
+  const lowerPercent = tier.rank.topPercent;
+  const upperPercent = rankIndex === 0 ? 0 : TRACKMANIA_RANKS[rankIndex - 1].topPercent;
+  const rankProgress = (lowerPercent - tier.topPercentage / 100) / (lowerPercent - upperPercent);
+  const divisionProgress = rankProgress * 4 - (tier.division - 1);
+  return Math.max(0, Math.min(1, divisionProgress));
+}
+
+export function renderPlayerProfile(
+  profile: WebsitePlayerProfile | null,
+  accountId: string,
+  cotdPage: WebsitePlayerCotdPage = { results: [], total: 0 },
+  page = 1,
+): Response {
   if (!profile) {
     return htmlResponse('Player not found', <><h1>Player not found</h1><p><a href="/leaderboard">Browse the leaderboard</a></p></>, 404);
   }
@@ -192,23 +470,79 @@ export function renderPlayerProfile(profile: WebsitePlayerProfile | null, accoun
   const { username, state, rank, total, tier, topPercentageText, peakRating, divisionEstimate, history, rankBands } = profile;
   const firstHistoryDate = history[0]?.cotdDate ?? '—';
   const lastHistoryDate = history[history.length - 1]?.cotdDate ?? '—';
+  const recentPace = history.slice(-5).reduce<number | null>((totalChange, point) =>
+    point.ratingChange === null
+      ? totalChange
+      : (totalChange ?? 0) + point.ratingChange, null);
+  const divisionProgress = getPlayerDivisionProgress(rank, total, tier);
+  const progressLabel = tier.rank.code === 'trackmaster'
+    ? 'Progress toward rank #1'
+    : `Division ${tier.divisionRoman} progress`;
   return htmlResponse(`${username} profile`, <>
     <p className="muted"><a href="/leaderboard">← Leaderboard</a></p>
-    <h1>{username}</h1>
-    <p className="intro">Trackmania player profile · <a href={`/players/${encodeURIComponent(accountId)}`}>share this page</a></p>
-    <div className="stats">
-      <div className="stat"><span>Leaderboard rank</span><strong>#{rank} of {total.toLocaleString('en-US')}</strong></div>
-      <div className="stat"><span>Rating</span><strong>{formatRating(state.rating)}</strong></div>
-      <div className="stat"><span>Competitive rank</span><strong>{tier.fullName}</strong><span>Top {topPercentageText}%</span></div>
-      <div className="stat"><span>COTD division estimate</span><strong>{divisionEstimate === null ? 'Unavailable' : `Division ${divisionEstimate}`}</strong></div>
-      <div className="stat"><span>Eligible-era peak</span><strong>{peakRating === null ? 'Unavailable' : formatRating(peakRating)}</strong></div>
-      <div className="stat"><span>Completed COTDs</span><strong>{state.matchCount.toLocaleString('en-US')}</strong></div>
+    <div className="player-profile-intro">
+      <p className="intro">Trackmania player profile</p>
+      <div className="player-share">
+        <button className="player-share-button" type="button" data-copy-page-link aria-label="Copy link to this player profile">
+          <svg aria-hidden="true" viewBox="0 0 20 20" fill="none">
+            <path d="M8.25 11.75a3.5 3.5 0 0 0 4.95 0l3-3a3.5 3.5 0 0 0-4.95-4.95l-1.72 1.72" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            <path d="M11.75 8.25a3.5 3.5 0 0 0-4.95 0l-3 3a3.5 3.5 0 0 0 4.95 4.95l1.72-1.72" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          </svg>
+          <span data-copy-page-label>Share profile</span>
+        </button>
+        <span className="player-share-status" data-copy-page-status aria-live="polite" />
+      </div>
     </div>
+    <section className="player-card" aria-labelledby="player-card-title">
+      <div className="player-card-heading">
+        <div>
+          <h1 id="player-card-title">{username}</h1>
+          <span className="player-card-rank" style={{
+            color: tier.rank.svgColor,
+            borderColor: tier.rank.svgColor,
+          }}>{tier.fullName}</span>
+        </div>
+        <div className="player-card-rating">
+          <strong>{formatRating(state.rating)}</strong>
+          <span>RATING</span>
+        </div>
+      </div>
+      <div className="player-progress">
+        <div className="player-progress-label">
+          <span>{progressLabel}</span>
+          <strong>{Math.round(divisionProgress * 100)}%</strong>
+        </div>
+        <div className="player-progress-track" role="progressbar"
+          aria-label={progressLabel} aria-valuemin={0} aria-valuemax={100}
+          aria-valuenow={Math.round(divisionProgress * 100)}>
+          <span className="player-progress-fill" style={{
+            width: `${divisionProgress * 100}%`,
+            backgroundColor: tier.rank.svgColor,
+          }} />
+        </div>
+      </div>
+      <div className="player-card-stats">
+        <div className="player-card-stat"><span>Leaderboard rank</span><strong>#{rank} of {total.toLocaleString('en-US')}</strong></div>
+        <div className="player-card-stat"><span>Top percentile</span><strong>Top {topPercentageText}%</strong></div>
+        <div className="player-card-stat"><span>COTD division estimate</span><strong>{divisionEstimate === null ? 'Unavailable' : `Division ${divisionEstimate}`}</strong></div>
+        <div className="player-card-stat"><span>Eligible-era peak</span><strong>{peakRating === null ? 'Unavailable' : formatRating(peakRating)}</strong></div>
+        <div className="player-card-stat"><span>Recent pace <span className="player-card-stat-note">last 5 COTDs</span></span>
+          <strong className={recentPace === null ? '' : recentPace > 0 ? 'player-pace-positive' : recentPace < 0 ? 'player-pace-negative' : ''}>
+            {recentPace === null
+              ? 'Unavailable'
+              : <>{formatRatingChange(recentPace)}{recentPace === 0 ? null
+                : <> <span aria-hidden="true">{recentPace > 0 ? '▲' : '▼'}</span></>}</>}
+          </strong>
+        </div>
+        <div className="player-card-stat"><span>Completed COTDs</span><strong>{state.matchCount.toLocaleString('en-US')}</strong></div>
+      </div>
+    </section>
     <section className="panel"><h2>Rating history</h2>
       <p className="muted">Showing up to the latest {history.length} eligible results · {firstHistoryDate} to {lastHistoryDate}</p>
       <RatingChart history={history} bands={rankBands} />
     </section>
-    <section className="panel"><h2>Recent COTD results</h2><PlayerCotdResults history={history} /></section>
+    <PlayerCotdResultsSection pageData={cotdPage} page={page} accountId={accountId}
+      fetchHref={nextPage => `/players/${encodeURIComponent(accountId)}/cotd-results?page=${nextPage}`} />
   </>);
 }
 

@@ -14,7 +14,10 @@ test('rating state schema defines its composite primary key and rating index', (
   expect(config.name).toBe('player_rating_state');
   expect(config.columns.map(column => column.name)).toContain('match_count');
   expect(config.primaryKeys).toHaveLength(1);
-  expect(config.indexes.map(index => index.config.name)).toContain('idx_player_rating_mode_rating');
+  expect(config.indexes.map(index => index.config.name)).toEqual([
+    'idx_player_rating_mode_rating',
+    'idx_player_rating_eligible_rank',
+  ]);
 });
 
 test('COTD day schema defines date and leaderboard indexes', () => {
