@@ -197,6 +197,27 @@ test('daily update runs record starts, successes, and failures', async () => {
   expect(failedStatus.latestRun?.status).toBe('failed');
   expect(failedStatus.latestRun?.completedAt).toBeInstanceOf(Date);
   expect(failedStatus.lastSuccessfulRun?.status).toBe('succeeded');
+
+  const operationFailure = new Error('operation failed while status storage is unavailable');
+  const originalError = console.error;
+  const errors = mock(() => {});
+  console.error = errors;
+  try {
+    await expect(runTrackedDailyUpdate(async () => {
+      await database.db.run(sql.raw('DROP TABLE daily_update_runs'));
+      throw operationFailure;
+    })).rejects.toBe(operationFailure);
+    expect(errors).toHaveBeenCalledTimes(1);
+    expect(errors.mock.calls[0]?.[0]).toMatch(/could not record failure for run \d+/);
+    expect(errors.mock.calls[0]?.[1]).toBeDefined();
+  } finally {
+    console.error = originalError;
+    for (const statement of migrationStatements.filter(statement =>
+      statement.includes('daily_update_runs')
+    )) {
+      await database.db.run(sql.raw(makeIdempotent(statement)));
+    }
+  }
 });
 
 test('COTD storage lists pending, processed, and leaderboard-incomplete cups', async () => {
