@@ -86,7 +86,10 @@ export async function renderLeaderboard(
       </>);
     }
 
-    return Response.redirect(new URL(`/players/${encodeURIComponent(accountId)}`, url), 302);
+    return new Response(null, {
+      status: 302,
+      headers: { location: `/players/${encodeURIComponent(accountId)}` },
+    });
   }
 
   const page = Number(url.searchParams.get('page') ?? '1');

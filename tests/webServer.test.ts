@@ -487,7 +487,7 @@ test('search redirects exact matches to shareable profiles and escapes misses', 
   await withServer(createDataSource(), async baseUrl => {
     const found = await fetchPage(`${baseUrl}/leaderboard?q=Player`, { redirect: 'manual' });
     expect(found.status).toBe(302);
-    expect(found.headers.get('location')).toContain(`/players/${accountId}`);
+    expect(found.headers.get('location')).toBe(`/players/${accountId}`);
 
     const missing = await fetchPage(`${baseUrl}/leaderboard?q=%3Cscript%3E`);
     const html = await missing.text();
