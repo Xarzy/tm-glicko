@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { WebsiteDataSource } from './data';
 import { htmlLoadingResponse, htmlResponse, Layout } from './html';
 import { renderLegalPage } from './legalPages';
+import { renderRatingsGuide } from './pages/ratings-guide';
 import { renderLeaderboard } from './pages/leaderboard';
 import { renderDuel } from './pages/duel';
 import { CotdList } from './components/cotd-list';
@@ -85,6 +86,7 @@ export function createWebsiteApp(data?: WebsiteDataSource) {
   });
   app.on(['GET', 'HEAD'], '/terms', () => renderLegalPage('terms'));
   app.on(['GET', 'HEAD'], '/privacy', () => renderLegalPage('privacy'));
+  app.on(['GET', 'HEAD'], '/ratings', () => renderRatingsGuide());
   app.on(['GET', 'HEAD'], '/players/:accountId/cotd-results', async context => {
     const accountId = context.req.param('accountId');
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(accountId)) {

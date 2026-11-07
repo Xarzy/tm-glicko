@@ -8,9 +8,12 @@ import {
   cotdDaysTable,
   playerRatingStateTable,
   challengeLeaderboardsTable,
+  dailyUpdateRunsTable,
+  playerDisplayNamesTable,
   playerRatingHistoryTable,
   type RatingMode,
   type SelectPlayerRatingState,
+  type SelectDailyUpdateRun,
   type InsertCotdDay,
   type SelectCotdDay,
   type InsertChallengeLeaderboard,
@@ -382,6 +385,168 @@ export async function getRecentProcessedCotdDays(limit = 20): Promise<SelectCotd
     .where(and(isNotNull(cotdDaysTable.processedAt), gt(cotdDaysTable.cardinal, 0)))
     .orderBy(sql`${cotdDaysTable.startDate} DESC`)
     .limit(limit);
+}
+
+export async function getLatestProcessedCotdAt(): Promise<Date | null> {
+  const [latest] = await db.select({ processedAt: cotdDaysTable.processedAt })
+    .from(cotdDaysTable)
+    .where(and(isNotNull(cotdDaysTable.processedAt), gt(cotdDaysTable.cardinal, 0)))
+    .orderBy(sql`${cotdDaysTable.processedAt} DESC`)
+    .limit(1);
+  return latest?.processedAt ?? null;
+}
+
+export async function startDailyUpdateRun(): Promise<number> {
+  const [run] = await db.insert(dailyUpdateRunsTable)
+    .values({ status: 'running', startedAt: new Date() })
+    .returning({ id: dailyUpdateRunsTable.id });
+  if (!run || run.id === undefined) throw new Error('Could not create daily update run record.');
+  return run.id;
+}
+
+export async function finishDailyUpdateRun(
+  id: number,
+  status: 'succeeded' | 'failed',
+): Promise<void> {
+  const result = await db.update(dailyUpdateRunsTable)
+    .set({ status, completedAt: new Date() })
+    .where(and(eq(dailyUpdateRunsTable.id, id), eq(dailyUpdateRunsTable.status, 'running')));
+  if (result.rowsAffected !== 1) {
+    throw new Error(`Could not finish active daily update run ${id}.`);
+  }
+}
+
+export async function getDailyUpdateStatus(): Promise<{
+  latestRun: SelectDailyUpdateRun | null;
+  lastSuccessfulRun: SelectDailyUpdateRun | null;
+}> {
+  const [latestRun] = await db.select().from(dailyUpdateRunsTable)
+    .orderBy(sql`${dailyUpdateRunsTable.startedAt} DESC`)
+    .limit(1);
+  const [lastSuccessfulRun] = await db.select().from(dailyUpdateRunsTable)
+    .where(eq(dailyUpdateRunsTable.status, 'succeeded'))
+    .orderBy(sql`${dailyUpdateRunsTable.completedAt} DESC`)
+    .limit(1);
+  return {
+    latestRun: latestRun ?? null,
+    lastSuccessfulRun: lastSuccessfulRun
+      ? { ...lastSuccessfulRun, status: 'succeeded' as const }
+      : null,
+  };
+}
+
+export async function getCachedPlayerDisplayNames(accountIds: string[]): Promise<Map<string, string>> {
+  if (accountIds.length === 0) return new Map();
+  const names = new Map<string, string>();
+  const uniqueAccountIds = [...new Set(accountIds)];
+  for (let i = 0; i < uniqueAccountIds.length; i += CHUNK_SIZE) {
+    const rows = await db.select({
+      accountId: playerDisplayNamesTable.accountId,
+      displayName: playerDisplayNamesTable.displayName,
+    })
+      .from(playerDisplayNamesTable)
+      .where(inArray(playerDisplayNamesTable.accountId, uniqueAccountIds.slice(i, i + CHUNK_SIZE)));
+    for (const row of rows) names.set(row.accountId, row.displayName);
+  }
+  return names;
+}
+
+export async function getPlayerDisplayNameAccountIds(): Promise<Set<string>> {
+  const rows = await db.select({ accountId: playerDisplayNamesTable.accountId })
+    .from(playerDisplayNamesTable);
+  return new Set(rows.map(row => row.accountId));
+}
+
+export async function savePlayerDisplayNames(names: { accountId: string; displayName: string }[]): Promise<void> {
+  if (names.length === 0) return;
+  const updatedAt = new Date();
+  const rows = names.map(({ accountId, displayName }) => ({
+    accountId,
+    displayName,
+    normalizedName: displayName.trim().toLowerCase(),
+    updatedAt,
+  }));
+  await db.transaction(async tx => {
+    for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+      await tx.insert(playerDisplayNamesTable).values(rows.slice(i, i + CHUNK_SIZE))
+        .onConflictDoUpdate({
+          target: playerDisplayNamesTable.accountId,
+          set: {
+            displayName: sql`excluded.display_name`,
+            normalizedName: sql`excluded.normalized_name`,
+            updatedAt: sql`excluded.updated_at`,
+          },
+        });
+    }
+  });
+}
+
+export async function findAccountIdByDisplayName(displayName: string): Promise<string | null> {
+  const normalizedName = displayName.trim().toLowerCase();
+  if (!normalizedName) return null;
+  const [row] = await db.select({ accountId: playerDisplayNamesTable.accountId })
+    .from(playerDisplayNamesTable)
+    .where(eq(playerDisplayNamesTable.normalizedName, normalizedName))
+    .orderBy(asc(playerDisplayNamesTable.accountId))
+    .limit(1);
+  return row?.accountId ?? null;
+}
+
+export async function searchPlayerDisplayNames(
+  query: string,
+  limit: number,
+): Promise<{ accountId: string; displayName: string; rating: number; rank: number }[]> {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (normalizedQuery.length < 2 || !Number.isInteger(limit) || limit < 1 || limit > 10) return [];
+  const higherRatedState = alias(playerRatingStateTable, 'higher_rated_state');
+  return db.select({
+    accountId: playerDisplayNamesTable.accountId,
+    displayName: playerDisplayNamesTable.displayName,
+    rating: playerRatingStateTable.rating,
+    rank: sql<number>`1 + (
+      SELECT count(*)
+      FROM ${playerRatingStateTable} AS ${higherRatedState}
+      WHERE ${higherRatedState.mode} = 'qualifying'
+        AND ${higherRatedState.lastProcessedCupId} IS NOT NULL
+        AND ${higherRatedState.matchCount} >= ${MIN_RANKED_COTDS}
+        AND (
+          ${higherRatedState.rating} > ${playerRatingStateTable.rating}
+          OR (
+            ${higherRatedState.rating} = ${playerRatingStateTable.rating}
+            AND ${higherRatedState.accountId} < ${playerRatingStateTable.accountId}
+          )
+        )
+    )`,
+  })
+    .from(playerDisplayNamesTable)
+    .innerJoin(playerRatingStateTable, eq(
+      playerRatingStateTable.accountId,
+      playerDisplayNamesTable.accountId,
+    ))
+    .where(and(
+      eq(playerRatingStateTable.mode, 'qualifying'),
+      isNotNull(playerRatingStateTable.lastProcessedCupId),
+      gte(playerRatingStateTable.matchCount, MIN_RANKED_COTDS),
+      sql`instr(${playerDisplayNamesTable.normalizedName}, ${normalizedQuery}) > 0`,
+    ))
+    .orderBy(sql`${playerRatingStateTable.rating} DESC`, asc(playerRatingStateTable.accountId))
+    .limit(limit);
+}
+
+export async function getAllPlayerAccountIds(): Promise<string[]> {
+  const [leaderboardRows, stateRows, historyRows] = await Promise.all([
+    db.selectDistinct({ accountId: challengeLeaderboardsTable.player })
+      .from(challengeLeaderboardsTable),
+    db.selectDistinct({ accountId: playerRatingStateTable.accountId })
+      .from(playerRatingStateTable),
+    db.selectDistinct({ accountId: playerRatingHistoryTable.accountId })
+      .from(playerRatingHistoryTable),
+  ]);
+  return [...new Set([
+    ...leaderboardRows.map(row => row.accountId),
+    ...stateRows.map(row => row.accountId),
+    ...historyRows.map(row => row.accountId),
+  ])].sort();
 }
 
 export async function getCotdResults(cupId: number, limit = 100): Promise<

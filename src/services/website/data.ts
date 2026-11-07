@@ -1,25 +1,26 @@
 import {
   getCotdDayById,
   getCotdResults,
+  findAccountIdByDisplayName,
   getEligiblePeakRating,
   getEligibleRatingPlayerCount,
   getDuelCupResults,
+  getLatestProcessedCotdAt,
+  getDailyUpdateStatus,
   getPlayerCotdResults as queryPlayerCotdResults,
   getPlayerRatingStateIfExists,
   getPlayerRatingStatesByRankRange,
   getRatingRank,
   getRecentEligibleRatingHistory,
   getRecentProcessedCotdDays,
+  searchPlayerDisplayNames,
 } from '../../db';
 import {
   MIN_RANKED_COTDS,
   type SelectCotdDay,
   type SelectPlayerRatingState,
 } from '../../db/schema';
-import {
-  findAccountIdByUsername,
-  findUsernamesByAccountIds,
-} from '../accountLookup';
+import { getDisplayNames as getCachedDisplayNames } from '../playerDisplayNames';
 import {
   formatTopPercentage,
   getCotdDivisionEstimate,
@@ -31,10 +32,6 @@ import {
   type PlayerRankTierInfo,
 } from '../rankService';
 import { timeWebStage } from './timing';
-
-const DISPLAY_NAME_TTL_MS = 5 * 60 * 1000;
-const displayNameCache = new Map<string, { name: string; expiresAt: number }>();
-let warnedMissingTrackmaniaOAuth = false;
 
 export interface WebsitePlayerHistoryPoint {
   cupId: number;
@@ -69,6 +66,13 @@ export interface WebsiteLeaderboardEntry {
   rank: number;
   tier: PlayerRankTierInfo;
   previousRating: number | null;
+}
+
+export interface WebsitePlayerSearchSuggestion {
+  accountId: string;
+  username: string;
+  rating: number;
+  rank: number;
 }
 
 export interface WebsiteCotdResult {
@@ -108,9 +112,17 @@ export interface WebsiteDuelCupPage {
   draws: number;
 }
 
+export interface WebsiteDailyUpdateStatus {
+  latestRun: { id: number; status: 'running' | 'succeeded' | 'failed'; startedAt: Date; completedAt: Date | null } | null;
+  lastSuccessfulRun: { id: number; status: 'running' | 'succeeded' | 'failed'; startedAt: Date; completedAt: Date | null } | null;
+}
+
 export interface WebsiteDataSource {
   rankOptions: { code: string; label: string }[];
+  getLatestProcessedCotdAt(): Promise<Date | null>;
+  getDailyUpdateStatus(): Promise<WebsiteDailyUpdateStatus>;
   findAccountIdByUsername(username: string): Promise<string | null>;
+  searchPlayerSuggestions(query: string, limit: number): Promise<WebsitePlayerSearchSuggestion[]>;
   getDisplayNames(accountIds: string[]): Promise<Map<string, string>>;
   getLeaderboardPage(page: number, limit: number, tierCode?: string): Promise<{ entries: WebsiteLeaderboardEntry[]; total: number }>;
   getRecentProcessedCotdDays(limit: number): Promise<SelectCotdDay[]>;
@@ -121,40 +133,7 @@ export interface WebsiteDataSource {
 }
 
 async function getDisplayNames(accountIds: string[]): Promise<Map<string, string>> {
-  const names = new Map<string, string>();
-  const now = Date.now();
-  const idsToFetch: string[] = [];
-
-  for (const accountId of accountIds) {
-    const cached = displayNameCache.get(accountId);
-    if (cached && cached.expiresAt > now) names.set(accountId, cached.name);
-    else idsToFetch.push(accountId);
-  }
-
-  if (idsToFetch.length > 0) {
-    if (!process.env.TRACKMANIA_OAUTH_CLIENT_ID || !process.env.TRACKMANIA_OAUTH_CLIENT_SECRET) {
-      if (!warnedMissingTrackmaniaOAuth) {
-        console.warn('[web] Trackmania OAuth is not configured; displaying account IDs instead of usernames.');
-        warnedMissingTrackmaniaOAuth = true;
-      }
-      return names;
-    }
-
-    try {
-      const fetchedNames = await timeWebStage(
-        `Trackmania display-name lookup (${idsToFetch.length} uncached)`,
-        () => findUsernamesByAccountIds(idsToFetch),
-      );
-      for (const [accountId, name] of fetchedNames) {
-        names.set(accountId, name);
-        displayNameCache.set(accountId, { name, expiresAt: now + DISPLAY_NAME_TTL_MS });
-      }
-    } catch (error) {
-      console.error('[web] Trackmania display-name lookup failed:', error);
-    }
-  }
-
-  return names;
+  return getCachedDisplayNames(accountIds);
 }
 
 async function getLeaderboardPage(page: number, limit: number, tierCode?: string) {
@@ -191,6 +170,16 @@ async function getLeaderboardPage(page: number, limit: number, tierCode?: string
     })))
   );
   return { entries, total };
+}
+
+async function searchPlayerSuggestions(query: string, limit: number): Promise<WebsitePlayerSearchSuggestion[]> {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (normalizedQuery.length < 2 || !Number.isInteger(limit) || limit < 1) return [];
+  const matches = await timeWebStage(
+    'player display-name database search',
+    () => searchPlayerDisplayNames(normalizedQuery, Math.min(limit, 10)),
+  );
+  return matches.map(({ displayName, ...player }) => ({ ...player, username: displayName }));
 }
 
 async function getPlayerProfile(accountId: string): Promise<WebsitePlayerProfile | null> {
@@ -274,7 +263,10 @@ async function getDuelCupResultsPage(
 
 export const websiteData: WebsiteDataSource = {
   rankOptions: TRACKMANIA_RANKS.map(rank => ({ code: rank.code, label: rank.name })),
-  findAccountIdByUsername,
+  getLatestProcessedCotdAt,
+  getDailyUpdateStatus,
+  findAccountIdByUsername: findAccountIdByDisplayName,
+  searchPlayerSuggestions,
   getDisplayNames,
   getLeaderboardPage,
   getRecentProcessedCotdDays,

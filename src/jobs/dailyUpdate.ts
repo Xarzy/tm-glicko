@@ -1,16 +1,21 @@
 import { discoverNewCotdDays, processPendingDays } from '../services/cotdIngestion';
+import { syncMissingPlayerDisplayNames } from '../services/playerDisplayNames';
+import { runTrackedDailyUpdate } from './trackedDailyUpdate';
 
-export async function runDailyUpdate() {
-  const newDays = await discoverNewCotdDays();
-  console.log(`[daily] discovered ${newDays} new day(s)`);
+export async function runDailyUpdate(): Promise<void> {
+  await runTrackedDailyUpdate(async () => {
+    await syncMissingPlayerDisplayNames();
+    const newDays = await discoverNewCotdDays();
+    console.log(`[daily] discovered ${newDays} new day(s)`);
 
-  let total = 0;
-  while (true) {
-    const { processed } = await processPendingDays(20);
-    total += processed;
-    if (processed === 0) break;
-  }
-  console.log(`[daily] processed ${total} day(s)`);
+    let total = 0;
+    while (true) {
+      const { processed } = await processPendingDays(20);
+      total += processed;
+      if (processed === 0) break;
+    }
+    console.log(`[daily] processed ${total} day(s)`);
+  });
 }
 
 if (import.meta.main) {

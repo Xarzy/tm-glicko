@@ -90,7 +90,25 @@ const leaderboardEntry: WebsiteLeaderboardEntry = {
 function createDataSource(overrides: Partial<WebsiteDataSource> = {}): WebsiteDataSource {
   return {
     rankOptions: [{ code: 'master-1', label: 'Master 1' }],
+    getLatestProcessedCotdAt: async () => cotdDay.processedAt,
+    getDailyUpdateStatus: async () => ({
+      latestRun: {
+        id: 1,
+        status: 'succeeded',
+        startedAt: cotdDay.processedAt!,
+        completedAt: cotdDay.processedAt!,
+      },
+      lastSuccessfulRun: {
+        id: 1,
+        status: 'succeeded',
+        startedAt: cotdDay.processedAt!,
+        completedAt: cotdDay.processedAt!,
+      },
+    }),
     findAccountIdByUsername: async username => username === 'Player' ? accountId : null,
+    searchPlayerSuggestions: async (query, limit) => 'Player'.toLowerCase().includes(query.toLowerCase())
+      ? [{ accountId, username: 'Player', rating: 2600, rank: 1 }].slice(0, limit)
+      : [],
     getDisplayNames: async () => new Map(),
     getLeaderboardPage: async () => ({ entries: [leaderboardEntry], total: 1 }),
     getRecentProcessedCotdDays: async () => [cotdDay],
@@ -198,6 +216,88 @@ test('serves a searchable, paginated leaderboard and recent COTDs', async () => 
     expect(secondPage.status).toBe(200);
     expect(requestedPage).toBe(2);
     expect(requestedTier).toBe('master-1');
+  });
+});
+
+test('shows latest COTD processing time and warns when data may be stale', async () => {
+  const recentUpdate = new Date(Date.now() - 60 * 60 * 1_000);
+  const staleUpdate = new Date(Date.now() - 48 * 60 * 60 * 1_000);
+
+  await withServer(createDataSource({
+    getLatestProcessedCotdAt: async () => recentUpdate,
+    getDailyUpdateStatus: async () => ({
+      latestRun: { id: 1, status: 'succeeded', startedAt: recentUpdate, completedAt: recentUpdate },
+      lastSuccessfulRun: { id: 1, status: 'succeeded', startedAt: recentUpdate, completedAt: recentUpdate },
+    }),
+  }), async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/leaderboard`);
+    const html = await response.text();
+    expect(html).toContain('Latest processed COTD');
+    expect(html).toContain(recentUpdate.toISOString());
+    expect(html).toContain('UTC');
+    expect(html).toContain('The last daily update succeeded.');
+    expect(html).toContain('Last successful update');
+    expect(html).not.toContain('No successful daily update');
+  });
+
+  await withServer(createDataSource({
+    getLatestProcessedCotdAt: async () => staleUpdate,
+    getDailyUpdateStatus: async () => ({
+      latestRun: { id: 2, status: 'succeeded', startedAt: staleUpdate, completedAt: staleUpdate },
+      lastSuccessfulRun: { id: 2, status: 'succeeded', startedAt: staleUpdate, completedAt: staleUpdate },
+    }),
+  }), async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/leaderboard`);
+    expect(await response.text()).toContain('Last successful update is over 36 hours old');
+  });
+
+  await withServer(createDataSource({
+    getLatestProcessedCotdAt: async () => recentUpdate,
+    getDailyUpdateStatus: async () => ({
+      latestRun: { id: 2, status: 'running', startedAt: recentUpdate, completedAt: null },
+      lastSuccessfulRun: { id: 1, status: 'succeeded', startedAt: recentUpdate, completedAt: recentUpdate },
+    }),
+  }), async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/leaderboard`);
+    expect(await response.text()).toContain('A daily update is currently running.');
+  });
+
+  await withServer(createDataSource({
+    getLatestProcessedCotdAt: async () => staleUpdate,
+    getDailyUpdateStatus: async () => ({
+      latestRun: { id: 2, status: 'running', startedAt: staleUpdate, completedAt: null },
+      lastSuccessfulRun: { id: 1, status: 'succeeded', startedAt: staleUpdate, completedAt: staleUpdate },
+    }),
+  }), async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/leaderboard`);
+    const html = await response.text();
+    expect(html).toContain('A daily update has been running for over 36 hours.');
+    expect(html).toContain('Last successful update is over 36 hours old');
+  });
+
+  await withServer(createDataSource({
+    getLatestProcessedCotdAt: async () => staleUpdate,
+    getDailyUpdateStatus: async () => ({
+      latestRun: { id: 2, status: 'failed', startedAt: staleUpdate, completedAt: staleUpdate },
+      lastSuccessfulRun: { id: 1, status: 'succeeded', startedAt: recentUpdate, completedAt: recentUpdate },
+    }),
+  }), async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/leaderboard`);
+    const html = await response.text();
+    expect(html).toContain('The last daily update failed.');
+    expect(html).toContain('Last successful update ·');
+    expect(html).toContain(recentUpdate.toISOString());
+  });
+
+  await withServer(createDataSource({
+    getLatestProcessedCotdAt: async () => null,
+    getDailyUpdateStatus: async () => ({ latestRun: null, lastSuccessfulRun: null }),
+  }), async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/leaderboard`);
+    const html = await response.text();
+    expect(html).toContain('No processed COTD data is available yet.');
+    expect(html).toContain('No daily update has been recorded.');
+    expect(html).toContain('No successful daily update has been recorded.');
   });
 });
 
@@ -397,6 +497,35 @@ test('search redirects exact matches to shareable profiles and escapes misses', 
   });
 });
 
+test('suggests partial player-name matches after exact lookup misses', async () => {
+  let suggestionQuery = '';
+  let suggestionCalls = 0;
+  const data = createDataSource({
+    searchPlayerSuggestions: async (query, limit) => {
+      suggestionCalls += 1;
+      suggestionQuery = query;
+      return [{ accountId, username: 'Player Name', rating: 2_600, rank: 12 }].slice(0, limit);
+    },
+  });
+
+  await withServer(data, async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/leaderboard?q=lay`);
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(suggestionQuery).toBe('lay');
+    expect(html).toContain('aria-label="Player search suggestions"');
+    expect(html).toContain('Player Name');
+    expect(html).toContain('#12');
+    expect(html).toContain('href="/players/player-123"');
+    expect(html).toContain('cached display names of all eligible players');
+
+    const shortQuery = await fetchPage(`${baseUrl}/leaderboard?q=p`);
+    expect(await shortQuery.text()).toContain('No exact Trackmania username match for “p”.');
+    expect(suggestionCalls).toBe(1);
+  });
+});
+
 test('rejects excessive search and invalid pagination before data access', async () => {
   await withServer(createDataSource(), async baseUrl => {
     const tooLong = await fetchPage(`${baseUrl}/leaderboard?q=${'a'.repeat(65)}`);
@@ -584,6 +713,7 @@ test('serves linked terms of service and privacy policy pages', async () => {
     const homeHtml = await home.text();
     expect(homeHtml).toContain('href="/terms">Terms of Service</a>');
     expect(homeHtml).toContain('href="/privacy">Privacy Policy</a>');
+    expect(homeHtml).toContain('href="/ratings">How ratings work</a>');
 
     const terms = await fetch(`${baseUrl}/terms`);
     const termsHtml = await terms.text();
@@ -599,6 +729,13 @@ test('serves linked terms of service and privacy policy pages', async () => {
     expect(privacyHtml).toContain('Discord account identifiers');
     expect(privacyHtml).toContain('Spanish Data Protection Agency (AEPD)');
     expect(privacyHtml).toContain('mailto:');
+
+    const ratings = await fetch(`${baseUrl}/ratings`);
+    const ratingsHtml = await ratings.text();
+    expect(ratings.status).toBe(200);
+    expect(ratingsHtml).toContain('>How ratings work</h1>');
+    expect(ratingsHtml).toContain('at least 10 processed COTDs');
+    expect(ratingsHtml).toContain('calibrated Glicko-2 model');
   });
 });
 

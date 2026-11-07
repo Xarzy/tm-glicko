@@ -2,6 +2,7 @@ import type { WebsiteDataSource } from '../data';
 import { formatRating, htmlResponse } from '../html';
 import { timeWebStage } from '../timing';
 import { CotdList } from '../components/cotd-list';
+import { DataFreshness } from '../components/data-freshness';
 
 const PAGE_SIZE = 25;
 
@@ -9,19 +10,44 @@ function SearchForm({
   rankOptions,
   value = '',
   selectedTier = '',
+  searchDescription,
 }: {
   rankOptions: WebsiteDataSource['rankOptions'];
   value?: string;
   selectedTier?: string;
+  searchDescription?: string;
 }) {
-  return <form className="my-5 flex max-w-2xl gap-2 max-[560px]:flex-wrap" action="/leaderboard" method="get">
-    <input className="min-w-0 flex-1 rounded-lg border border-[#374456] bg-[#10151e] px-3 py-2 text-[#edf2f7] max-[560px]:basis-full" name="q" maxLength={64} defaultValue={value} placeholder="Exact Trackmania username" aria-label="Trackmania username" />
-    <select className="rounded-lg border border-[#374456] bg-[#10151e] px-3 py-2" name="tier" aria-label="Filter competitive rank" defaultValue={selectedTier}>
-      <option value="">All ranks</option>
-      {rankOptions.map(rank => <option key={rank.code} value={rank.code}>{rank.label}</option>)}
-    </select>
-    <button className="cursor-pointer rounded-lg bg-[#45c9b5] px-3 py-2 font-bold text-[#081512]" type="submit">Search / filter</button>
-  </form>;
+  return <>
+    <form className="my-5 flex max-w-2xl gap-2 max-[560px]:flex-wrap" action="/leaderboard" method="get">
+      <input className="min-w-0 flex-1 rounded-lg border border-[#374456] bg-[#10151e] px-3 py-2 text-[#edf2f7] max-[560px]:basis-full" name="q" maxLength={64} defaultValue={value} placeholder="Exact Trackmania username" aria-label="Trackmania username" />
+      <select className="rounded-lg border border-[#374456] bg-[#10151e] px-3 py-2" name="tier" aria-label="Filter competitive rank" defaultValue={selectedTier}>
+        <option value="">All ranks</option>
+        {rankOptions.map(rank => <option key={rank.code} value={rank.code}>{rank.label}</option>)}
+      </select>
+      <button className="cursor-pointer rounded-lg bg-[#45c9b5] px-3 py-2 font-bold text-[#081512]" type="submit">Search / filter</button>
+    </form>
+    {searchDescription && <p className="search-help muted">{searchDescription}</p>}
+  </>;
+}
+
+function PlayerSearchSuggestions({
+  suggestions,
+}: {
+  suggestions: Awaited<ReturnType<WebsiteDataSource['searchPlayerSuggestions']>>;
+}) {
+  if (suggestions.length === 0) {
+    return <p className="muted">No partial matches found in the eligible-player suggestions.</p>;
+  }
+
+  return <section className="panel" aria-label="Player search suggestions">
+    <h2>Did you mean?</h2>
+    <ul className="list">
+      {suggestions.map(player => <li key={player.accountId}>
+        <a href={`/players/${encodeURIComponent(player.accountId)}`}>{player.username}</a>
+        <span className="muted"> · #{player.rank} · rating {formatRating(player.rating)}</span>
+      </li>)}
+    </ul>
+  </section>;
 }
 
 export async function renderLeaderboard(
@@ -44,10 +70,22 @@ export async function renderLeaderboard(
     if (!accountId) {
       return htmlResponse('Leaderboard', <>
         <h1>Player not found</h1>
-        <SearchForm rankOptions={data.rankOptions} value={query} selectedTier={selectedTier} />
+        <SearchForm
+          rankOptions={data.rankOptions}
+          value={query}
+          selectedTier={selectedTier}
+          searchDescription="Partial-name suggestions search the cached display names of all eligible players."
+        />
+        {query.length >= 2 && <PlayerSearchSuggestions
+          suggestions={await timeWebStage(
+            'leaderboard partial player search',
+            () => data.searchPlayerSuggestions(query, 5),
+          )}
+        />}
         <p className="muted">No exact Trackmania username match for “{query}”.</p>
       </>);
     }
+
     return Response.redirect(new URL(`/players/${encodeURIComponent(accountId)}`, url), 302);
   }
 
@@ -59,12 +97,17 @@ export async function renderLeaderboard(
     'leaderboard data load',
     () => data.getLeaderboardPage(page, PAGE_SIZE, selectedTier || undefined),
   );
+  const [latestProcessedAt, dailyUpdateStatus] = await Promise.all([
+    timeWebStage('latest processed COTD timestamp', () => data.getLatestProcessedCotdAt()),
+    timeWebStage('daily update status', () => data.getDailyUpdateStatus()),
+  ]);
   const recentCotds = showRecentCotds
     ? await timeWebStage('recent COTD query', () => data.getRecentProcessedCotdDays(10))
     : null;
   const content = <>
     <h1>Glicko Leaderboard</h1>
     <p className="intro">COTD qualifying ratings for eligible players, ordered by rating.</p>
+    <DataFreshness lastProcessedAt={latestProcessedAt} dailyUpdateStatus={dailyUpdateStatus} />
     <SearchForm rankOptions={data.rankOptions} selectedTier={selectedTier} />
     <section className="table-wrap">
       <table>

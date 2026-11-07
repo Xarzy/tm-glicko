@@ -136,17 +136,30 @@ The bot registers slash commands from `src/commands/`:
 
 ## Website
 
-- `/` and `/leaderboard` — browse the eligible-player leaderboard by page, filter by competitive rank, or find an exact Trackmania username
+- `/` and `/leaderboard` — browse the eligible-player leaderboard by page, filter by competitive rank, find an exact Trackmania username, or search cached display names for partial matches
 - `/players/:accountId` — shareable player profile with rank, rating, COTD division estimate, eligible-era peak, recent placements, and rating history
 - `/cotd` — browse recent processed COTDs
 - `/cotd/:cupId` — view the top 100 available placements for a COTD
+- `/ratings` — explanation of rating eligibility, tiers, and history
 - `/terms` — Terms of Service
 - `/privacy` — Privacy Policy
 - `/health` — JSON health check for hosting platforms
 
-Only players with at least 10 completed COTDs appear as ranked players. The
-leaderboard and COTD player names use Trackmania's display-name API when OAuth
-credentials are configured; otherwise account IDs are shown.
+Only players with at least 10 completed COTDs appear as ranked players. Player
+display names are cached in the database, so leaderboard and partial-name
+searches do not need a Trackmania API request once names have been cached.
+Daily updates backfill missing names and refresh the names of each new COTD's
+participants. Trackmania OAuth credentials are required to populate and refresh
+the cache; otherwise account IDs are shown.
+
+The leaderboard freshness panel records the latest daily update and last
+successful completion. This status history is stored in the `daily_update_runs`
+table.
+
+The leaderboard shows when the newest processed COTD was recorded, the outcome
+of the latest daily update, and the last successful update. A failed run, a
+success older than 36 hours, or a run still in progress after 36 hours is
+flagged. Failure details remain in the job logs and are not exposed publicly.
 
 ## Data flow
 
@@ -231,9 +244,9 @@ does not copy data from the local SQLite file. Do not run the initial migration
 against an existing database that already has these tables.
 
 For an existing database, back it up and run `bunx drizzle-kit migrate` to
-apply pending migrations only. The eligible-player rank-index migration
-improves leaderboard and profile queries and may take some time to build on
-large databases.
+apply pending migrations only. Apply migrations before deploying the updated
+app or running the daily job. The player display-name migration adds the
+persistent cache used by the leaderboard search and daily refresh.
 
 To copy an existing local database, stop the bot, back up `local.db`, and
 ensure the hosted tables are empty. Preview the row counts with
