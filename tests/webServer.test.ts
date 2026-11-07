@@ -5,14 +5,14 @@ import {
   escapeHtml,
   renderRatingChart,
   startWebServer,
-} from '../src/services/webServer';
+} from '../src/services/website/server';
 import type {
   WebsiteDataSource,
   WebsiteDuelCupResult,
   WebsiteLeaderboardEntry,
   WebsitePlayerHistoryPoint,
   WebsitePlayerProfile,
-} from '../src/services/websiteData';
+} from '../src/services/website/data';
 
 const accountId = 'player-123';
 const cotdDay: SelectCotdDay = {
@@ -336,6 +336,50 @@ test('paginates duel COTDs while keeping the overall record and player names', a
     expect(secondHtml).toContain('Page 2 of 2');
     expect(secondHtml).toContain('page=1');
     expect(secondHtml).toContain('Cup 1</a>');
+  });
+});
+
+test('handles invalid and unmatched duel players and redirects out-of-range pages', async () => {
+  const data = createDataSource({
+    findAccountIdByUsername: async username => {
+      if (username === 'Missing first' || username === 'Missing second') return null;
+      if (username === 'Same first' || username === 'Same second') return 'same-account';
+      if (username === 'First') return 'first-account';
+      if (username === 'Second') return 'second-account';
+      return null;
+    },
+    getDuelCupResults: async () => ({
+      results: [],
+      total: 21,
+      firstWins: 0,
+      secondWins: 0,
+      draws: 0,
+    }),
+  });
+
+  await withServer(data, async baseUrl => {
+    const tooLong = await fetchPage(`${baseUrl}/duel?player1=${'a'.repeat(65)}&player2=Second`);
+    expect(tooLong.status).toBe(400);
+    expect(await tooLong.text()).toContain('Player name is too long');
+
+    const missingFirst = await fetchPage(`${baseUrl}/duel?player1=Missing%20first&player2=Second`);
+    expect(missingFirst.status).toBe(200);
+    expect(await missingFirst.text()).toContain('No exact Trackmania username match for “Missing first”');
+
+    const missingSecond = await fetchPage(`${baseUrl}/duel?player1=First&player2=Missing%20second`);
+    expect(missingSecond.status).toBe(200);
+    expect(await missingSecond.text()).toContain('No exact Trackmania username match for “Missing second”');
+
+    const samePlayer = await fetchPage(`${baseUrl}/duel?player1=Same%20first&player2=Same%20second`);
+    expect(samePlayer.status).toBe(200);
+    expect(await samePlayer.text()).toContain('Choose two different players to start a duel.');
+
+    const outOfRange = await fetchPage(
+      `${baseUrl}/duel?player1=First&player2=Second&page=99`,
+      { redirect: 'manual' },
+    );
+    expect(outOfRange.status).toBe(302);
+    expect(outOfRange.headers.get('location')).toContain('page=2');
   });
 });
 

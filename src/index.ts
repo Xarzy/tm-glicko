@@ -3,7 +3,7 @@ import type { ChatInputCommandInteraction } from 'discord.js';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { startWebServer } from './services/webServer';
+import { startWebServer } from './services/website/server';
 
 interface Command {
   data: { name: string; toJSON(): unknown }; // loose on purpose — matches any SlashCommandBuilder variant

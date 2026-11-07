@@ -10,16 +10,16 @@ import {
   getRatingRank,
   getRecentEligibleRatingHistory,
   getRecentProcessedCotdDays,
-} from '../db';
+} from '../../db';
 import {
   MIN_RANKED_COTDS,
   type SelectCotdDay,
   type SelectPlayerRatingState,
-} from '../db/schema';
+} from '../../db/schema';
 import {
   findAccountIdByUsername,
   findUsernamesByAccountIds,
-} from './accountLookup';
+} from '../accountLookup';
 import {
   formatTopPercentage,
   getCotdDivisionEstimate,
@@ -29,8 +29,8 @@ import {
   TRACKMANIA_RANKS,
   type RankThresholdBand,
   type PlayerRankTierInfo,
-} from './rankService';
-import { timeWebStage } from './website/timing';
+} from '../rankService';
+import { timeWebStage } from './timing';
 
 const DISPLAY_NAME_TTL_MS = 5 * 60 * 1000;
 const displayNameCache = new Map<string, { name: string; expiresAt: number }>();

@@ -1,8 +1,8 @@
-import type { WebsiteDataSource } from './websiteData';
-import { createWebsiteApp } from './website/routes';
+import type { WebsiteDataSource } from './data';
+import { createWebsiteApp } from './routes';
 
-export { escapeHtml } from './website/html';
-export { renderRatingChart } from './website/pages';
+export { escapeHtml } from './html';
+export { renderRatingChart } from './components/rating-chart';
 
 export function startWebServer(port: number, data?: WebsiteDataSource) {
   const app = createWebsiteApp(data);
