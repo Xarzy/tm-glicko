@@ -1,6 +1,7 @@
 import { createClient, type Transaction } from '@libsql/client';
 import { drizzle } from 'drizzle-orm/libsql';
 import { inArray, isNotNull, isNull, asc, sql, eq, and, or, gt, gte } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
 import { retryDatabaseCall } from './retry';
 import * as schema from './schema';
 import {
@@ -255,6 +256,11 @@ export async function getPlayerRatingStatesByRankRange(
     throw new Error('Rank range must use positive integer start and limit values.');
   }
 
+  const eligibleStates = and(
+    eq(playerRatingStateTable.mode, mode),
+    isNotNull(playerRatingStateTable.lastProcessedCupId),
+    gte(playerRatingStateTable.matchCount, MIN_RANKED_COTDS),
+  );
   const rows = await db
     .select({
       accountId: playerRatingStateTable.accountId,
@@ -269,16 +275,14 @@ export async function getPlayerRatingStatesByRankRange(
       lastRatedAt: playerRatingStateTable.lastRatedAt,
       lastFetchedAt: playerRatingStateTable.lastFetchedAt,
       updatedAt: playerRatingStateTable.updatedAt,
-      total: sql<number>`count(*) over()`,
+      total: sql<number>`(
+        SELECT count(*)
+        FROM ${playerRatingStateTable}
+        WHERE ${eligibleStates}
+      )`,
     })
     .from(playerRatingStateTable)
-    .where(
-      and(
-        eq(playerRatingStateTable.mode, mode),
-        isNotNull(playerRatingStateTable.lastProcessedCupId),
-        gte(playerRatingStateTable.matchCount, MIN_RANKED_COTDS),
-      )
-    )
+    .where(eligibleStates)
     .orderBy(
       sql`${playerRatingStateTable.rating} DESC`,
       asc(playerRatingStateTable.accountId),
@@ -288,7 +292,7 @@ export async function getPlayerRatingStatesByRankRange(
 
   return {
     states: rows.map(({ total: _total, ...state }) => state),
-    total: rows[0]?.total ?? 0,
+    total: rows.length > 0 ? rows[0]!.total : 0,
   };
 }
 
@@ -664,4 +668,168 @@ export async function getRecentEligibleRatingHistory(
     rating,
     ratingChange: previousRating === null ? null : rating - previousRating,
   }));
+}
+
+export async function getPlayerCotdResults(
+  accountId: string,
+  limit = 10,
+  offset = 0,
+): Promise<{
+  results: {
+    cupId: number;
+    cotdDate: string;
+    name: string;
+    rank: number | null;
+    rating: number;
+    ratingChange: number | null;
+  }[];
+  total: number;
+}> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('COTD history page size must be an integer between 1 and 100.');
+  }
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new Error('COTD history offset must be a non-negative safe integer.');
+  }
+
+  const eligibleHistory = db.$with('eligible_cotd_history').as(
+    db.select({
+      id: playerRatingHistoryTable.id,
+      cupId: playerRatingHistoryTable.cupId,
+      cotdDate: playerRatingHistoryTable.cotdDate,
+      rank: playerRatingHistoryTable.rank,
+      rating: playerRatingHistoryTable.rating,
+      previousRating: sql<number | null>`lag(${playerRatingHistoryTable.rating}) over (
+        order by ${playerRatingHistoryTable.cotdDate} asc, ${playerRatingHistoryTable.id} asc
+      )`.as('previous_rating'),
+      completedCotds: sql<number>`row_number() over (
+        order by ${playerRatingHistoryTable.cotdDate} asc, ${playerRatingHistoryTable.id} asc
+      )`.as('completed_cotds'),
+    })
+      .from(playerRatingHistoryTable)
+      .innerJoin(
+        playerRatingStateTable,
+        and(
+          eq(playerRatingStateTable.accountId, playerRatingHistoryTable.accountId),
+          eq(playerRatingStateTable.mode, 'qualifying'),
+          isNotNull(playerRatingStateTable.lastProcessedCupId),
+          gte(playerRatingStateTable.matchCount, MIN_RANKED_COTDS),
+        ),
+      )
+      .where(and(
+        eq(playerRatingHistoryTable.accountId, accountId),
+        eq(playerRatingHistoryTable.mode, 'qualifying'),
+        eq(playerRatingHistoryTable.isFlagged, false),
+      ))
+  );
+  const [countRows, pageRows] = await Promise.all([
+    db.with(eligibleHistory).select({
+      total: sql<number>`count(*)`,
+    })
+      .from(eligibleHistory)
+      .innerJoin(cotdDaysTable, eq(cotdDaysTable.cupId, eligibleHistory.cupId))
+      .where(gte(eligibleHistory.completedCotds, MIN_RANKED_COTDS)),
+    db.with(eligibleHistory).select({
+      cupId: eligibleHistory.cupId,
+      cotdDate: eligibleHistory.cotdDate,
+      name: cotdDaysTable.name,
+      rank: eligibleHistory.rank,
+      rating: eligibleHistory.rating,
+      previousRating: eligibleHistory.previousRating,
+    })
+      .from(eligibleHistory)
+      .innerJoin(cotdDaysTable, eq(cotdDaysTable.cupId, eligibleHistory.cupId))
+      .where(gte(eligibleHistory.completedCotds, MIN_RANKED_COTDS))
+      .orderBy(sql`${eligibleHistory.cotdDate} DESC`, sql`${eligibleHistory.id} DESC`)
+      .limit(limit)
+      .offset(offset),
+  ]);
+  return {
+    results: pageRows.map(({ previousRating, rating, ...result }) => ({
+      ...result,
+      rating,
+      ratingChange: previousRating === null ? null : rating - previousRating,
+    })),
+    total: countRows[0]?.total ?? 0,
+  };
+}
+
+export async function getDuelCupResults(
+  firstAccountId: string,
+  secondAccountId: string,
+  limit = 20,
+  offset = 0,
+): Promise<{
+  results: { cupId: number; cotdDate: string; name: string; firstRank: number; secondRank: number }[];
+  total: number;
+  firstWins: number;
+  secondWins: number;
+  draws: number;
+}> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('Duel result page size must be an integer between 1 and 100.');
+  }
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new Error('Duel result offset must be a non-negative safe integer.');
+  }
+
+  const firstHistory = alias(playerRatingHistoryTable, 'first_history');
+  const secondHistory = alias(playerRatingHistoryTable, 'second_history');
+
+  const [countRows, pageRows] = await Promise.all([
+    db.select({
+      total: sql<number>`count(*)`,
+      firstWins: sql<number>`coalesce(sum(case when ${firstHistory.rank} < ${secondHistory.rank} then 1 else 0 end), 0)`,
+      secondWins: sql<number>`coalesce(sum(case when ${secondHistory.rank} < ${firstHistory.rank} then 1 else 0 end), 0)`,
+      draws: sql<number>`coalesce(sum(case when ${firstHistory.rank} = ${secondHistory.rank} then 1 else 0 end), 0)`,
+    })
+      .from(firstHistory)
+      .innerJoin(secondHistory, and(
+        eq(secondHistory.cupId, firstHistory.cupId),
+        eq(secondHistory.mode, 'qualifying'),
+        eq(secondHistory.accountId, secondAccountId),
+        isNotNull(secondHistory.rank),
+      ))
+      .innerJoin(cotdDaysTable, eq(cotdDaysTable.cupId, firstHistory.cupId))
+      .where(and(
+        eq(firstHistory.accountId, firstAccountId),
+        eq(firstHistory.mode, 'qualifying'),
+        isNotNull(firstHistory.rank),
+        isNotNull(cotdDaysTable.processedAt),
+      )),
+    db.select({
+      cupId: firstHistory.cupId,
+      cotdDate: firstHistory.cotdDate,
+      name: cotdDaysTable.name,
+      firstRank: firstHistory.rank,
+      secondRank: secondHistory.rank,
+    })
+      .from(firstHistory)
+      .innerJoin(secondHistory, and(
+        eq(secondHistory.cupId, firstHistory.cupId),
+        eq(secondHistory.mode, 'qualifying'),
+        eq(secondHistory.accountId, secondAccountId),
+        isNotNull(secondHistory.rank),
+      ))
+      .innerJoin(cotdDaysTable, eq(cotdDaysTable.cupId, firstHistory.cupId))
+      .where(and(
+        eq(firstHistory.accountId, firstAccountId),
+        eq(firstHistory.mode, 'qualifying'),
+        isNotNull(firstHistory.rank),
+        isNotNull(cotdDaysTable.processedAt),
+      ))
+      .orderBy(sql`${cotdDaysTable.startDate} DESC`, sql`${firstHistory.cupId} DESC`)
+      .limit(limit)
+      .offset(offset),
+  ]);
+  const counts = countRows[0];
+  return {
+    results: pageRows.flatMap(row => row.firstRank !== null && row.secondRank !== null
+      ? [{ ...row, firstRank: row.firstRank, secondRank: row.secondRank }]
+      : []),
+    total: counts?.total ?? 0,
+    firstWins: counts?.firstWins ?? 0,
+    secondWins: counts?.secondWins ?? 0,
+    draws: counts?.draws ?? 0,
+  };
 }

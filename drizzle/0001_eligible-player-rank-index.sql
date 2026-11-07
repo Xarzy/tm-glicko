@@ -1,0 +1,1 @@
+CREATE INDEX `idx_player_rating_eligible_rank` ON `player_rating_state` (`mode`,"rating" desc,"account_id" asc) WHERE last_processed_cup_id IS NOT NULL AND match_count >= 10;

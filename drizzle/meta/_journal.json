@@ -8,6 +8,13 @@
       "when": 1791480320948,
       "tag": "0000_initial-libsql-schema",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1793808088200,
+      "tag": "0001_eligible-player-rank-index",
+      "breakpoints": true
     }
   ]
 }

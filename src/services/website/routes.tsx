@@ -3,7 +3,16 @@ import { join } from 'node:path';
 import type { WebsiteDataSource } from '../websiteData';
 import { htmlLoadingResponse, htmlResponse, Layout } from './html';
 import { renderLegalPage } from './legalPages';
-import { CotdList, renderCotdDetail, renderLeaderboard, renderPlayerProfile } from './pages';
+import {
+  CotdList,
+  parsePaginationPage,
+  PLAYER_COTD_PAGE_SIZE,
+  renderCotdDetail,
+  renderDuel,
+  renderLeaderboard,
+  renderPlayerCotdResultsFragment,
+  renderPlayerProfile,
+} from './pages';
 
 async function getDataSource(data?: WebsiteDataSource): Promise<WebsiteDataSource> {
   return data ?? (await import('../websiteData')).websiteData;
@@ -22,7 +31,14 @@ export function createWebsiteApp(data?: WebsiteDataSource) {
     if (context.req.path !== '/health' && context.req.method !== 'GET' && context.req.method !== 'HEAD') {
       return context.text('Method not allowed', 405, { allow: 'GET, HEAD' });
     }
-    await next();
+    const started = performance.now();
+    try {
+      await next();
+    } finally {
+      console.info(
+        `[web-timing] ${context.req.method} ${context.req.path} request total: ${(performance.now() - started).toFixed(1)}ms`,
+      );
+    }
   });
 
   app.all('/health', context => context.json({ status: 'ok' }));
@@ -35,7 +51,7 @@ export function createWebsiteApp(data?: WebsiteDataSource) {
     return new Response(stylesheet, {
       headers: {
         'content-type': 'text/css; charset=utf-8',
-        'cache-control': 'public, max-age=3600',
+        'cache-control': 'no-cache',
       },
     });
   });
@@ -48,7 +64,7 @@ export function createWebsiteApp(data?: WebsiteDataSource) {
     return new Response(script, {
       headers: {
         'content-type': 'text/javascript; charset=utf-8',
-        'cache-control': 'public, max-age=3600',
+        'cache-control': 'no-cache',
       },
     });
   });
@@ -60,6 +76,11 @@ export function createWebsiteApp(data?: WebsiteDataSource) {
     initialPageResponse(context.req.raw, 'Leaderboard')
       ?? renderLeaderboard(new URL(context.req.url), false, await getDataSource(data))
   );
+  app.on(['GET', 'HEAD'], '/duel', async context => {
+    const initialResponse = initialPageResponse(context.req.raw, 'Player duel');
+    if (initialResponse) return initialResponse;
+    return renderDuel(new URL(context.req.url), await getDataSource(data));
+  });
   app.on(['GET', 'HEAD'], '/cotd', async context => {
     const initialResponse = initialPageResponse(context.req.raw, 'Recent COTDs');
     if (initialResponse) return initialResponse;
@@ -68,6 +89,25 @@ export function createWebsiteApp(data?: WebsiteDataSource) {
   });
   app.on(['GET', 'HEAD'], '/terms', () => renderLegalPage('terms'));
   app.on(['GET', 'HEAD'], '/privacy', () => renderLegalPage('privacy'));
+  app.on(['GET', 'HEAD'], '/players/:accountId/cotd-results', async context => {
+    const accountId = context.req.param('accountId');
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(accountId)) {
+      return htmlResponse('Not found', <><h1>Page not found</h1><p><a href="/">Go to the leaderboard</a></p></>, 404);
+    }
+    const url = new URL(context.req.url);
+    const page = parsePaginationPage(url);
+    if (page === null) {
+      return htmlResponse('Player profile', <><h1>Invalid page</h1><p>Page must be a positive integer.</p></>, 400);
+    }
+    const source = await getDataSource(data);
+    const cotdPage = await source.getPlayerCotdResults(accountId, page, PLAYER_COTD_PAGE_SIZE);
+    const pageCount = Math.ceil(cotdPage.total / PLAYER_COTD_PAGE_SIZE);
+    if (pageCount > 0 && page > pageCount) {
+      url.searchParams.set('page', String(pageCount));
+      return Response.redirect(url, 302);
+    }
+    return renderPlayerCotdResultsFragment(cotdPage, accountId, page);
+  });
   app.on(['GET', 'HEAD'], '/players/:accountId', async context => {
     const accountId = context.req.param('accountId');
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(accountId)) {
@@ -76,7 +116,21 @@ export function createWebsiteApp(data?: WebsiteDataSource) {
     const initialResponse = initialPageResponse(context.req.raw, 'Player profile');
     if (initialResponse) return initialResponse;
     const source = await getDataSource(data);
-    return renderPlayerProfile(await source.getPlayerProfile(accountId), accountId);
+    const url = new URL(context.req.url);
+    const page = parsePaginationPage(url);
+    if (page === null) {
+      return htmlResponse('Player profile', <><h1>Invalid page</h1><p>Page must be a positive integer.</p></>, 400);
+    }
+    const profile = await source.getPlayerProfile(accountId);
+    if (!profile || profile.status === 'unranked') return renderPlayerProfile(profile, accountId);
+
+    const cotdPage = await source.getPlayerCotdResults(accountId, page, PLAYER_COTD_PAGE_SIZE);
+    const pageCount = Math.ceil(cotdPage.total / PLAYER_COTD_PAGE_SIZE);
+    if (pageCount > 0 && page > pageCount) {
+      url.searchParams.set('page', String(pageCount));
+      return Response.redirect(url, 302);
+    }
+    return renderPlayerProfile(profile, accountId, cotdPage, page);
   });
   app.on(['GET', 'HEAD'], '/cotd/:cupId', async context => {
     const rawCupId = context.req.param('cupId');

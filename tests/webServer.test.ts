@@ -8,6 +8,7 @@ import {
 } from '../src/services/webServer';
 import type {
   WebsiteDataSource,
+  WebsiteDuelCupResult,
   WebsiteLeaderboardEntry,
   WebsitePlayerHistoryPoint,
   WebsitePlayerProfile,
@@ -94,6 +95,20 @@ function createDataSource(overrides: Partial<WebsiteDataSource> = {}): WebsiteDa
     getLeaderboardPage: async () => ({ entries: [leaderboardEntry], total: 1 }),
     getRecentProcessedCotdDays: async () => [cotdDay],
     getPlayerProfile: async () => rankedProfile,
+    getPlayerCotdResults: async (_accountId, page, limit) => ({
+      results: history.slice().reverse()
+        .slice((page - 1) * limit, page * limit)
+        .map(({ cupId, cotdDate, name, rank, rating, ratingChange }) =>
+          ({ cupId, cotdDate, name, rank, rating, ratingChange })),
+      total: history.length,
+    }),
+    getDuelCupResults: async (_firstAccountId, _secondAccountId, page, limit) => ({
+      results: [],
+      total: 0,
+      firstWins: 0,
+      secondWins: 0,
+      draws: 0,
+    }),
     getCotdDetail: async () => ({
       day: cotdDay,
       results: [{ player: accountId, username: 'Player', rank: 12, score: 6000 }],
@@ -157,15 +172,26 @@ test('serves a searchable, paginated leaderboard and recent COTDs', async () => 
     const stylesheet = await fetch(`${baseUrl}/assets/site.css`);
     expect(stylesheet.status).toBe(200);
     expect(stylesheet.headers.get('content-type')).toContain('text/css');
+    expect(stylesheet.headers.get('cache-control')).toBe('no-cache');
     const css = await stylesheet.text();
     expect(css).toContain('bg-\\[\\#10151e\\]');
     expect(css).toContain('prefers-reduced-motion');
     expect(css).toContain('skeleton-shimmer');
+    expect(css).toContain('.duel-fields{');
+    expect(css).toContain('.duel-submit{');
 
     const navigationScript = await fetch(`${baseUrl}/assets/site.js`);
     expect(navigationScript.status).toBe(200);
     expect(navigationScript.headers.get('content-type')).toContain('text/javascript');
-    expect(await navigationScript.text()).toContain('Loading page');
+    expect(navigationScript.headers.get('cache-control')).toBe('no-cache');
+    const navigationJs = await navigationScript.text();
+    expect(navigationJs).toContain('Loading page');
+    expect(navigationJs).toContain('data-pagination-content');
+    expect(navigationJs).toContain('link.dataset.paginationTarget');
+    expect(navigationJs).toContain('link.dataset.paginationFetchUrl');
+    expect(navigationJs).toContain('paginationFetchUrl: requestUrl.href');
+    expect(navigationJs).toContain('navigator.clipboard.writeText(window.location.href)');
+    expect(navigationJs).toContain('Profile link copied to clipboard.');
     expect(html).toContain('<script src="/assets/site.js" defer=""></script>');
 
     const secondPage = await fetchPage(`${baseUrl}/leaderboard?page=2&tier=master-1`);
@@ -206,7 +232,7 @@ test('serves the page shell before waiting for leaderboard data', async () => {
   });
 
   await withServer(data, async baseUrl => {
-    for (const path of ['/', '/leaderboard', '/cotd', `/players/${accountId}`, `/cotd/${cotdDay.cupId}`]) {
+    for (const path of ['/', '/leaderboard', '/duel', '/cotd', `/players/${accountId}`, `/cotd/${cotdDay.cupId}`]) {
       const initial = await fetch(`${baseUrl}${path}`);
       const initialHtml = await initial.text();
       expect(initial.status).toBe(200);
@@ -226,6 +252,90 @@ test('serves the page shell before waiting for leaderboard data', async () => {
 
     releaseLeaderboard();
     expect(await pageContent).toContain('Glicko Leaderboard');
+  });
+});
+
+test('compares exact-match players using their shared COTD placements', async () => {
+  const sharedResults: WebsiteDuelCupResult[] = [
+    { cupId: 3, cotdDate: '2026-10-17', name: 'Cup 3', firstRank: 4, secondRank: 10 },
+    { cupId: 2, cotdDate: '2026-10-16', name: 'Cup 2', firstRank: 12, secondRank: 7 },
+    { cupId: 1, cotdDate: '2026-10-15', name: 'Cup 1', firstRank: 1, secondRank: 1 },
+  ];
+  const data = createDataSource({
+    findAccountIdByUsername: async username => username === 'First'
+      ? 'first-account'
+      : username === 'Second' ? 'second-account' : null,
+    getDisplayNames: async ids => new Map(ids.map(id => [
+      id,
+      id === 'first-account' ? 'First Player' : 'Second Player',
+    ])),
+    getDuelCupResults: async (_firstAccountId, _secondAccountId, page, limit) => ({
+      results: sharedResults.slice((page - 1) * limit, page * limit),
+      total: sharedResults.length,
+      firstWins: 1,
+      secondWins: 1,
+      draws: 1,
+    }),
+  });
+
+  await withServer(data, async baseUrl => {
+    const form = await fetchPage(`${baseUrl}/duel`);
+    const formHtml = await form.text();
+    expect(form.status).toBe(200);
+    expect(formHtml).toContain('name="player1"');
+    expect(formHtml).toContain('name="player2"');
+    expect(formHtml).toContain('class="duel-form panel"');
+    expect(formHtml).toContain('class="duel-form-vs"');
+
+    const response = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second`);
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(html).toContain('First Player vs Second Player');
+    expect(html).toContain('class="duel-score">1 <span>–</span> 1</span>');
+    expect(html).toContain('>1 tied cup</span>');
+    expect(html).toContain('3 shared cups');
+    expect(html).toContain('Cup 3');
+    expect(html).toContain('First Player');
+    expect(html).toContain('Second Player');
+  });
+});
+
+test('paginates duel COTDs while keeping the overall record and player names', async () => {
+  const allResults: WebsiteDuelCupResult[] = Array.from({ length: 21 }, (_, index) => ({
+    cupId: 300 - index,
+    cotdDate: `2026-10-${String(21 - index).padStart(2, '0')}`,
+    name: `Cup ${21 - index}`,
+    firstRank: index < 12 ? 1 : 2,
+    secondRank: index < 12 ? 2 : 1,
+  }));
+  const data = createDataSource({
+    findAccountIdByUsername: async username => username === 'First'
+      ? 'first-account'
+      : username === 'Second' ? 'second-account' : null,
+    getDuelCupResults: async (_firstAccountId, _secondAccountId, page, limit) => ({
+      results: allResults.slice((page - 1) * limit, page * limit),
+      total: allResults.length,
+      firstWins: 12,
+      secondWins: 9,
+      draws: 0,
+    }),
+  });
+
+  await withServer(data, async baseUrl => {
+    const firstPage = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second`);
+    const firstHtml = await firstPage.text();
+    expect(firstHtml).toContain('>12 <span>–</span> 9</span>');
+    expect(firstHtml).toContain('Page 1 of 2');
+    expect(firstHtml).toContain('page=2');
+    expect(firstHtml).toContain('Cup 21');
+    expect(firstHtml).not.toContain('Cup 1</a>');
+
+    const secondPage = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&page=2`);
+    const secondHtml = await secondPage.text();
+    expect(secondHtml).toContain('>12 <span>–</span> 9</span>');
+    expect(secondHtml).toContain('Page 2 of 2');
+    expect(secondHtml).toContain('page=1');
+    expect(secondHtml).toContain('Cup 1</a>');
   });
 });
 
@@ -255,6 +365,14 @@ test('rejects excessive search and invalid pagination before data access', async
     const invalidTier = await fetchPage(`${baseUrl}/leaderboard?tier=unknown`);
     expect(invalidTier.status).toBe(400);
     expect(await invalidTier.text()).toContain('Invalid rank filter');
+
+    const invalidDuelPage = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&page=0`);
+    expect(invalidDuelPage.status).toBe(400);
+    expect(await invalidDuelPage.text()).toContain('Invalid page');
+
+    const invalidProfilePage = await fetchPage(`${baseUrl}/players/${accountId}?page=1.5`);
+    expect(invalidProfilePage.status).toBe(400);
+    expect(await invalidProfilePage.text()).toContain('Invalid page');
   });
 });
 
@@ -265,14 +383,88 @@ test('renders ranked shareable profiles with rating history and placements', asy
 
     expect(response.status).toBe(200);
     expect(html).toContain('Leaderboard rank');
+    expect(html).toContain('class="player-card"');
+    expect(html).toContain('role="progressbar"');
+    expect(html).toContain('aria-label="Division III progress"');
+    expect(html).toContain('Top percentile');
     expect(html).toContain('Eligible-era peak');
     expect(html).toContain('Rating history');
+    expect(html).toContain('data-copy-page-link');
+    expect(html).toContain('Share profile');
+    expect(html).toContain('aria-live="polite"');
+    expect(html).not.toContain('share this page');
     expect(html).toContain('>M1</text>');
     expect(html).toContain('+25.5');
     expect(html).toContain('Division 2');
     expect(html).toContain('placement #12');
     expect(html).toContain('Player &lt;script&gt;');
     expect(html).not.toContain('<script>alert(1)</script>');
+  });
+});
+
+test('shows rating pace across the five most recent eligible COTDs on the player card', async () => {
+  const paceHistory = [100, 5, -2, 10, 1, -3].map((ratingChange, index) => ({
+    ...history[0],
+    cupId: history[0].cupId - 5 + index,
+    rating: 2500 + index,
+    ratingChange,
+  }));
+  const data = createDataSource({
+    getPlayerProfile: async () => ({ ...rankedProfile, history: paceHistory }),
+  });
+
+  await withServer(data, async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/players/${accountId}`);
+    const html = await response.text();
+
+    expect(html).toContain('Recent pace');
+    expect(html).toContain('last 5 COTDs');
+    expect(html).toContain('player-pace-positive');
+    expect(html).toContain('+11.0');
+    expect(html).toContain('▲');
+  });
+});
+
+test('paginates recent COTD results independently on player profiles', async () => {
+  let profileCalls = 0;
+  const results = Array.from({ length: 11 }, (_, index) => ({
+    cupId: 500 - index,
+    cotdDate: `2026-10-${String(20 - index).padStart(2, '0')}`,
+    name: `Profile Cup ${11 - index}`,
+    rank: index + 1,
+    rating: 2_996 - index,
+    ratingChange: index === 10 ? null : 2.4,
+  }));
+  const data = createDataSource({
+    getPlayerProfile: async () => {
+      profileCalls += 1;
+      return rankedProfile;
+    },
+    getPlayerCotdResults: async (_accountId, page, limit) => ({
+      results: results.slice((page - 1) * limit, page * limit),
+      total: results.length,
+    }),
+  });
+
+  await withServer(data, async baseUrl => {
+    const firstPage = await fetchPage(`${baseUrl}/players/${accountId}`);
+    const firstHtml = await firstPage.text();
+    expect(profileCalls).toBe(1);
+    expect(firstHtml).toContain('Page 1 of 2');
+    expect(firstHtml).toContain('?page=2');
+    expect(firstHtml).toContain(`/players/${accountId}/cotd-results?page=2`);
+    expect(firstHtml).toContain('Profile Cup 11');
+    expect(firstHtml).toContain('rating 2,996');
+    expect(firstHtml).toContain('(+2.4)');
+    expect(firstHtml).not.toContain('Profile Cup 1</a>');
+
+    const secondPage = await fetchPage(`${baseUrl}/players/${accountId}/cotd-results?page=2`);
+    const secondHtml = await secondPage.text();
+    expect(profileCalls).toBe(1);
+    expect(secondHtml).toContain('Page 2 of 2');
+    expect(secondHtml).toContain('?page=1');
+    expect(secondHtml).toContain('Profile Cup 1</a>');
+    expect(secondHtml).not.toContain('Rating history');
   });
 });
 

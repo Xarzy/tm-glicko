@@ -20,10 +20,14 @@ mock.module('../src/db/retry', () => ({
 
 const database = await import('../src/db');
 const schema = await import('../src/db/schema');
-const migrationPath = fileURLToPath(new URL('../drizzle/0000_initial-libsql-schema.sql', import.meta.url));
-const migrationStatements = readFileSync(migrationPath, 'utf8')
-  .split('--> statement-breakpoint')
-  .filter(statement => statement.trim());
+const migrationStatements = [
+  '0000_initial-libsql-schema.sql',
+  '0001_eligible-player-rank-index.sql',
+].flatMap(fileName =>
+  readFileSync(fileURLToPath(new URL(`../drizzle/${fileName}`, import.meta.url)), 'utf8')
+    .split('--> statement-breakpoint')
+    .filter(statement => statement.trim())
+);
 
 beforeAll(async () => {
   for (const statement of migrationStatements) {
@@ -300,6 +304,82 @@ test('division samples use processed cups and omit flagged or missing placements
     { rating: 1_600, rank: 50, fieldSize: 1_000 },
   ]);
   await expect(database.getRecentCotdDivisionSamples(0)).rejects.toThrow('positive integer');
+});
+
+test('duel results include only shared placements from processed COTDs', async () => {
+  await database.insertCotdDaysIfNew([
+    createCup(1, { processedAt: new Date() }),
+    createCup(2, { processedAt: new Date() }),
+    createCup(3),
+    createCup(4, { processedAt: new Date() }),
+  ]);
+  await database.batchInsertRatingHistory([
+    { accountId: 'first', cupId: 1, cotdDate: '2026-10-01', mode: 'qualifying', rating: 1_600, rd: 100, rank: 8, isFlagged: false },
+    { accountId: 'second', cupId: 1, cotdDate: '2026-10-01', mode: 'qualifying', rating: 1_600, rd: 100, rank: 12, isFlagged: true },
+    { accountId: 'first', cupId: 2, cotdDate: '2026-10-02', mode: 'qualifying', rating: 1_600, rd: 100, rank: 20, isFlagged: false },
+    { accountId: 'second', cupId: 2, cotdDate: '2026-10-02', mode: 'qualifying', rating: 1_600, rd: 100, rank: 5, isFlagged: false },
+    { accountId: 'first', cupId: 3, cotdDate: '2026-10-03', mode: 'qualifying', rating: 1_600, rd: 100, rank: 3, isFlagged: false },
+    { accountId: 'second', cupId: 3, cotdDate: '2026-10-03', mode: 'qualifying', rating: 1_600, rd: 100, rank: 4, isFlagged: false },
+    { accountId: 'first', cupId: 4, cotdDate: '2026-10-04', mode: 'qualifying', rating: 1_600, rd: 100, rank: null, isFlagged: false },
+    { accountId: 'second', cupId: 4, cotdDate: '2026-10-04', mode: 'qualifying', rating: 1_600, rd: 100, rank: 4, isFlagged: false },
+  ]);
+
+  expect(await database.getDuelCupResults('first', 'second', 1, 0)).toEqual({
+    results: [{ cupId: 2, cotdDate: '2026-10-02', name: 'COTD 2', firstRank: 20, secondRank: 5 }],
+    total: 2,
+    firstWins: 1,
+    secondWins: 1,
+    draws: 0,
+  });
+  expect(await database.getDuelCupResults('first', 'second', 1, 1)).toEqual({
+    results: [{ cupId: 1, cotdDate: '2026-10-01', name: 'COTD 1', firstRank: 8, secondRank: 12 }],
+    total: 2,
+    firstWins: 1,
+    secondWins: 1,
+    draws: 0,
+  });
+  expect(await database.getDuelCupResults('first', 'missing')).toEqual({
+    results: [],
+    total: 0,
+    firstWins: 0,
+    secondWins: 0,
+    draws: 0,
+  });
+  await expect(database.getDuelCupResults('first', 'second', 0)).rejects.toThrow('page size');
+});
+
+test('player COTD result pages include eligible, unflagged cups and report the total', async () => {
+  await database.insertCotdDaysIfNew(Array.from({ length: 22 }, (_, index) =>
+    createCup(index + 1, { processedAt: new Date() })
+  ));
+  await database.upsertPlayerRatingState('paged-player', 'qualifying', createState('paged-player', {
+    matchCount: 22,
+  }));
+  await database.batchInsertRatingHistory(Array.from({ length: 22 }, (_, index) => ({
+    accountId: 'paged-player',
+    cupId: index + 1,
+    cotdDate: `2026-10-${String(index + 1).padStart(2, '0')}`,
+    mode: 'qualifying' as const,
+    rating: 1_500 + index,
+    rd: 100,
+    rank: index === 21 ? null : index + 1,
+    isFlagged: index === 20,
+  })));
+
+  const firstPage = await database.getPlayerCotdResults('paged-player', 2, 0);
+  expect(firstPage.total).toBe(12);
+  expect(firstPage.results).toEqual([
+    { cupId: 22, cotdDate: '2026-10-22', name: 'COTD 22', rank: null, rating: 1_521, ratingChange: 2 },
+    { cupId: 20, cotdDate: '2026-10-20', name: 'COTD 20', rank: 20, rating: 1_519, ratingChange: 1 },
+  ]);
+  expect(await database.getPlayerCotdResults('paged-player', 2, 2)).toEqual({
+    total: 12,
+    results: [
+      { cupId: 19, cotdDate: '2026-10-19', name: 'COTD 19', rank: 19, rating: 1_518, ratingChange: 1 },
+      { cupId: 18, cotdDate: '2026-10-18', name: 'COTD 18', rank: 18, rating: 1_517, ratingChange: 1 },
+    ],
+  });
+  await expect(database.getPlayerCotdResults('paged-player', 0)).rejects.toThrow('page size');
 });
 
 test('bulk rating updates and account state lookup deduplicate and chunk IDs', async () => {

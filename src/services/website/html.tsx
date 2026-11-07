@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MIN_RANKED_COTDS } from '../../db/schema';
+import { timeWebStageSync } from './timing';
 
 export function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, character => ({
@@ -35,7 +36,7 @@ export function Layout({
       <header className="border-b border-[#28313d] bg-[#151b25]">
         <nav className="mx-auto flex min-h-16 w-[min(1100px,calc(100%-32px))] items-center gap-6 max-[560px]:gap-3">
           <strong className="mr-auto text-lg text-white"><a href="/">TM Glicko</a></strong>
-          <a href="/leaderboard">Leaderboard</a><a href="/cotd">COTDs</a>
+          <a href="/leaderboard">Leaderboard</a><a href="/duel">Duel</a><a href="/cotd">COTDs</a>
         </nav>
       </header>
       <main id="main-content" data-initial-load={initialLoad ? 'true' : undefined} className="mx-auto w-[min(1100px,calc(100%-32px))] py-8 pb-14 max-[560px]:pt-6">
@@ -56,7 +57,8 @@ export function Layout({
 }
 
 export function htmlResponse(title: string, content: ReactNode, status = 200): Response {
-  const markup = '<!doctype html>' + renderToStaticMarkup(<Layout title={title}>{content}</Layout>);
+  const markup = timeWebStageSync('HTML render', () =>
+    '<!doctype html>' + renderToStaticMarkup(<Layout title={title}>{content}</Layout>));
   return new Response(markup, {
     status,
     headers: {

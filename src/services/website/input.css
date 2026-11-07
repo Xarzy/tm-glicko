@@ -39,6 +39,75 @@
   .stat { @apply rounded-xl border border-[#293442] bg-[#171e29] p-3.5; }
   .stat span { @apply block text-sm text-[#a4afbd]; }
   .stat strong { @apply text-xl; }
+  .player-card { @apply my-5 rounded-2xl border border-[#293442] bg-[#171e29] p-6 max-[560px]:p-4; }
+  .player-card-heading { @apply flex items-start justify-between gap-4 max-[560px]:flex-col; }
+  .player-card-heading h1 { @apply mb-2 break-all; }
+  .player-card-rank { @apply inline-block rounded-full border px-3 py-1 text-sm font-semibold; }
+  .player-card-rating { @apply flex flex-col items-end max-[560px]:items-start; }
+  .player-card-rating strong { @apply text-3xl leading-tight; }
+  .player-card-rating span { @apply text-xs tracking-widest text-[#a4afbd]; }
+  .player-progress { @apply my-6; }
+  .player-progress-label { @apply mb-2 flex justify-between gap-3 text-sm text-[#a4afbd]; }
+  .player-progress-label strong { @apply text-[#edf2f7]; }
+  .player-progress-track { @apply h-3 overflow-hidden rounded-full bg-[#28313d]; }
+  .player-progress-fill { @apply block h-full rounded-full transition-[width] duration-500; }
+  .player-card-stats { @apply grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-3; }
+  .player-card-stat { @apply rounded-xl border border-[#293442] bg-[#10151e]/60 p-3.5; }
+  .player-card-stat span { @apply block text-sm text-[#a4afbd]; }
+  .player-card-stat > span .player-card-stat-note { @apply ml-1 inline-block text-xs; }
+  .player-card-stat strong { @apply mt-1 block text-lg; }
+  .player-card-stat strong span { @apply inline-block text-current text-xs; }
+  .player-pace-positive { @apply text-[#65d69a]; }
+  .player-pace-negative { @apply text-[#ff858f]; }
+  .player-profile-intro { @apply mb-6 flex items-center justify-between gap-4 max-[560px]:items-start max-[560px]:flex-col; }
+  .player-profile-intro .intro { @apply m-0; }
+  .player-share { @apply flex items-center gap-3; }
+  .player-share-button { @apply inline-flex cursor-pointer items-center gap-2 rounded-lg border border-[#354151] bg-[#171e29] px-3 py-2 text-sm font-semibold text-[#d9e3ed] hover:border-[#45c9b5] hover:bg-[#45c9b5]/10 hover:text-[#75d8ca] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#45c9b5]; }
+  .player-share-button svg { @apply h-4 w-4; }
+  .player-share-button[data-copy-state="copied"] { @apply border-[#45c9b5]/60 text-[#75d8ca]; }
+  .player-share-button[data-copy-state="error"] { @apply border-[#ff8c96]/60 text-[#ffb4bc]; }
+  .player-share-status { @apply text-xs text-[#a4afbd]; }
+  .duel-hero { @apply mx-auto mb-7 max-w-3xl; }
+  .duel-hero h1 { @apply mt-2 mb-2 text-4xl max-[560px]:text-3xl; }
+  .duel-hero .intro { @apply mb-0 text-lg; }
+  .duel-eyebrow { @apply text-xs font-bold tracking-[0.18em] text-[#45c9b5]; }
+  .duel-form { @apply mx-auto max-w-3xl border-[#34404e] p-6 shadow-xl shadow-black/10 max-[560px]:p-4; }
+  .duel-form-heading h2 { @apply mt-2 mb-1 text-xl; }
+  .duel-form-heading p { @apply mb-5 text-sm text-[#a4afbd]; }
+  .duel-fields { @apply grid grid-cols-[minmax(0,1fr)_44px_minmax(0,1fr)] items-end gap-3 max-[560px]:grid-cols-1; }
+  .duel-field { @apply flex min-w-0 flex-col gap-2 text-sm font-medium text-[#c5ccd5]; }
+  .duel-field > span { @apply flex items-center gap-2; }
+  .duel-field input { @apply w-full rounded-lg border border-[#374456] bg-[#10151e] px-3.5 py-3 text-base text-[#edf2f7] outline-none transition placeholder:text-[#697586] focus:border-[#45c9b5] focus:ring-2 focus:ring-[#45c9b5]/20; }
+  .duel-player-dot { @apply h-2.5 w-2.5 rounded-full; }
+  .duel-player-dot-first { @apply bg-[#45c9b5]; }
+  .duel-player-dot-second { @apply bg-[#9a8cff]; }
+  .duel-form-vs { @apply mb-3 flex h-10 w-10 items-center justify-center rounded-full border border-[#354151] bg-[#10151e] text-xs font-bold text-[#a4afbd] max-[560px]:hidden; }
+  .duel-submit { @apply mt-5 flex w-full items-center justify-center gap-2 rounded-lg bg-[#45c9b5] px-4 py-3 font-bold text-[#081512] hover:bg-[#60d9c7]; }
+  .duel-error { @apply max-w-3xl rounded-lg border border-[#753e48] bg-[#2a1c24] px-4 py-3 text-sm text-[#ffb4bc]; }
+  .duel-title-vs { @apply text-[#45c9b5]; }
+  .duel-scoreboard { @apply mb-8 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-6 overflow-hidden rounded-2xl border border-[#293442] bg-[radial-gradient(ellipse_at_center,#202b37_0%,#171e29_68%)] max-[560px]:grid-cols-2 max-[560px]:gap-1; }
+  .duel-contender { @apply flex min-w-0 flex-col gap-1 p-6 max-[560px]:p-4; }
+  .duel-contender-first { @apply items-start text-left max-[560px]:col-start-1 max-[560px]:row-start-1; }
+  .duel-contender-second { @apply items-end text-right max-[560px]:col-start-2 max-[560px]:row-start-1; }
+  .duel-contender-label { @apply text-xs font-bold tracking-[0.16em] text-[#8290a1]; }
+  .duel-contender-first .duel-contender-label { @apply text-[#45c9b5]; }
+  .duel-contender-second .duel-contender-label { @apply text-[#b2a8ff]; }
+  .duel-contender > strong { @apply max-w-full break-words text-xl max-[560px]:text-base; }
+  .duel-win-count { @apply text-sm font-semibold text-[#edf2f7]; }
+  .duel-win-count span { @apply font-normal text-[#8290a1]; }
+  .duel-score-center { @apply flex flex-col items-center gap-1 max-[560px]:col-span-2 max-[560px]:row-start-2 max-[560px]:pb-5; }
+  .duel-score { @apply whitespace-nowrap text-5xl font-bold tracking-tight max-[560px]:text-4xl; }
+  .duel-score > span { @apply px-1 text-[#8290a1]; }
+  .duel-score-caption { @apply text-[10px] font-bold tracking-[0.2em] text-[#8290a1]; }
+  .duel-summary { @apply col-span-3 flex justify-center gap-3 border-t border-[#293442] px-4 py-3 text-sm text-[#a4afbd] max-[560px]:col-span-2 max-[560px]:row-start-3; }
+  .duel-summary span + span { @apply border-l border-[#354151] pl-3; }
+  .duel-results { @apply mt-8; }
+  .duel-results-heading { @apply mb-3 flex items-end justify-between gap-4 max-[560px]:items-start; }
+  .duel-results-heading h2 { @apply m-0 text-xl; }
+  .duel-results-heading p { @apply m-0 text-sm text-[#a4afbd]; }
+  .duel-results-heading > span { @apply whitespace-nowrap text-sm text-[#8290a1]; }
+  .pagination { @apply mt-4 flex items-center justify-between gap-4 border-t border-[#293442] pt-4 text-sm; }
+  .pagination a { @apply rounded-lg border border-[#354151] px-3 py-1.5 font-medium hover:border-[#45c9b5] hover:bg-[#45c9b5]/10; }
   .list { @apply list-none p-0; }
   .list li { @apply border-b border-[#293442] py-3; }
   .list li:last-child { @apply border-0; }

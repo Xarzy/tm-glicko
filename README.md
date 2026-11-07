@@ -230,6 +230,11 @@ required), then run `bunx drizzle-kit migrate`. This creates the schema; it
 does not copy data from the local SQLite file. Do not run the initial migration
 against an existing database that already has these tables.
 
+For an existing database, back it up and run `bunx drizzle-kit migrate` to
+apply pending migrations only. The eligible-player rank-index migration
+improves leaderboard and profile queries and may take some time to build on
+large databases.
+
 To copy an existing local database, stop the bot, back up `local.db`, and
 ensure the hosted tables are empty. Preview the row counts with
 `bun run scripts/importLocalDatabase.ts --dry-run`, then import with

@@ -1,4 +1,5 @@
 import { sqliteTable, integer, text, real, primaryKey, index } from 'drizzle-orm/sqlite-core';
+import { asc, desc, sql } from 'drizzle-orm';
 
 export const ratingModeValues = ['qualifying', 'cup'] as const;
 export type RatingMode = typeof ratingModeValues[number];
@@ -21,6 +22,9 @@ export const playerRatingStateTable = sqliteTable('player_rating_state', {
 }, (table) => ({
   pk: primaryKey({ columns: [table.accountId, table.mode] }),
   ratingIdx: index('idx_player_rating_mode_rating').on(table.mode, table.rating),
+  eligibleRankIdx: index('idx_player_rating_eligible_rank')
+    .on(table.mode, desc(table.rating), asc(table.accountId))
+    .where(sql`last_processed_cup_id IS NOT NULL AND match_count >= 10`),
 }));
 
 export const cotdDaysTable = sqliteTable('cotd_days', {

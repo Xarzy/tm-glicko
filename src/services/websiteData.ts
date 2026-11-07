@@ -3,6 +3,8 @@ import {
   getCotdResults,
   getEligiblePeakRating,
   getEligibleRatingPlayerCount,
+  getDuelCupResults,
+  getPlayerCotdResults as queryPlayerCotdResults,
   getPlayerRatingStateIfExists,
   getPlayerRatingStatesByRankRange,
   getRatingRank,
@@ -28,6 +30,7 @@ import {
   type RankThresholdBand,
   type PlayerRankTierInfo,
 } from './rankService';
+import { timeWebStage } from './website/timing';
 
 const DISPLAY_NAME_TTL_MS = 5 * 60 * 1000;
 const displayNameCache = new Map<string, { name: string; expiresAt: number }>();
@@ -75,6 +78,36 @@ export interface WebsiteCotdResult {
   score: number | null;
 }
 
+export interface WebsiteDuelCupResult {
+  cupId: number;
+  cotdDate: string;
+  name: string;
+  firstRank: number;
+  secondRank: number;
+}
+
+export interface WebsitePlayerCotdResult {
+  cupId: number;
+  cotdDate: string;
+  name: string;
+  rank: number | null;
+  rating: number;
+  ratingChange: number | null;
+}
+
+export interface WebsitePlayerCotdPage {
+  results: WebsitePlayerCotdResult[];
+  total: number;
+}
+
+export interface WebsiteDuelCupPage {
+  results: WebsiteDuelCupResult[];
+  total: number;
+  firstWins: number;
+  secondWins: number;
+  draws: number;
+}
+
 export interface WebsiteDataSource {
   rankOptions: { code: string; label: string }[];
   findAccountIdByUsername(username: string): Promise<string | null>;
@@ -82,7 +115,9 @@ export interface WebsiteDataSource {
   getLeaderboardPage(page: number, limit: number, tierCode?: string): Promise<{ entries: WebsiteLeaderboardEntry[]; total: number }>;
   getRecentProcessedCotdDays(limit: number): Promise<SelectCotdDay[]>;
   getPlayerProfile(accountId: string): Promise<WebsitePlayerProfile | null>;
+  getPlayerCotdResults(accountId: string, page: number, limit: number): Promise<{ results: WebsitePlayerCotdResult[]; total: number }>;
   getCotdDetail(cupId: number): Promise<{ day: SelectCotdDay; results: WebsiteCotdResult[] } | null>;
+  getDuelCupResults(firstAccountId: string, secondAccountId: string, page: number, limit: number): Promise<WebsiteDuelCupPage>;
 }
 
 async function getDisplayNames(accountIds: string[]): Promise<Map<string, string>> {
@@ -106,7 +141,10 @@ async function getDisplayNames(accountIds: string[]): Promise<Map<string, string
     }
 
     try {
-      const fetchedNames = await findUsernamesByAccountIds(idsToFetch);
+      const fetchedNames = await timeWebStage(
+        `Trackmania display-name lookup (${idsToFetch.length} uncached)`,
+        () => findUsernamesByAccountIds(idsToFetch),
+      );
       for (const [accountId, name] of fetchedNames) {
         names.set(accountId, name);
         displayNameCache.set(accountId, { name, expiresAt: now + DISPLAY_NAME_TTL_MS });
@@ -123,46 +161,68 @@ async function getLeaderboardPage(page: number, limit: number, tierCode?: string
   let from = (page - 1) * limit + 1;
   let total = 0;
   if (tierCode) {
-    const playerCount = await getEligibleRatingPlayerCount('qualifying');
+    const playerCount = await timeWebStage(
+      'leaderboard eligible-player count query',
+      () => getEligibleRatingPlayerCount('qualifying'),
+    );
     const range = getRankLeaderboardPositionRange(tierCode, playerCount);
     total = Math.max(0, range.lastRank - range.firstRank + 1);
     from = range.firstRank + (page - 1) * limit;
     if (total === 0 || from > range.lastRank) return { entries: [], total };
   }
 
-  const { states, total: leaderboardTotal } = await getPlayerRatingStatesByRankRange('qualifying', from, limit);
+  const { states, total: leaderboardTotal } = await timeWebStage(
+    'leaderboard page query',
+    () => getPlayerRatingStatesByRankRange('qualifying', from, limit),
+  );
   if (!tierCode) total = leaderboardTotal;
-  const names = await getDisplayNames(states.map(state => state.accountId));
-  const entries = await Promise.all(states.map(async (state, index) => ({
-    accountId: state.accountId,
-    username: names.get(state.accountId) ?? state.accountId,
-    rating: state.rating,
-    rank: from + index,
-    tier: await getPlayerTier(state.rating, from + index, leaderboardTotal),
-    previousRating: state.previousRating,
-  })));
+  const names = await timeWebStage(
+    'leaderboard display names',
+    () => getDisplayNames(states.map(state => state.accountId)),
+  );
+  const entries = await timeWebStage('leaderboard tier calculation', () =>
+    Promise.all(states.map(async (state, index) => ({
+      accountId: state.accountId,
+      username: names.get(state.accountId) ?? state.accountId,
+      rating: state.rating,
+      rank: from + index,
+      tier: await getPlayerTier(state.rating, from + index, leaderboardTotal),
+      previousRating: state.previousRating,
+    })))
+  );
   return { entries, total };
 }
 
 async function getPlayerProfile(accountId: string): Promise<WebsitePlayerProfile | null> {
-  const state = await getPlayerRatingStateIfExists(accountId, 'qualifying');
+  const state = await timeWebStage(
+    'player state query',
+    () => getPlayerRatingStateIfExists(accountId, 'qualifying'),
+  );
   if (!state) return null;
-  const names = await getDisplayNames([accountId]);
+  const names = await timeWebStage('player display name', () => getDisplayNames([accountId]));
   const username = names.get(accountId) ?? accountId;
   if (state.lastProcessedCupId === null || state.matchCount < MIN_RANKED_COTDS) {
     return { status: 'unranked', username, matchCount: state.matchCount };
   }
 
-  const rankResult = await getRatingRank('qualifying', accountId, state.rating);
+  const rankResult = await timeWebStage(
+    'player rank query',
+    () => getRatingRank('qualifying', accountId, state.rating),
+  );
   if (rankResult.rank < 1 || rankResult.total < 1) {
     throw new Error(`Could not load leaderboard rank for player ${accountId}.`);
   }
   const [tier, peakRating, divisionEstimate, history, rankBands] = await Promise.all([
-    getPlayerTier(state.rating, rankResult.rank, rankResult.total),
-    getEligiblePeakRating(accountId, 'qualifying'),
-    getCotdDivisionEstimate(state.rating),
-    getRecentEligibleRatingHistory(accountId, 120),
-    getRankThresholdBands(),
+    timeWebStage('player tier calculation', () =>
+      getPlayerTier(state.rating, rankResult.rank, rankResult.total)),
+    timeWebStage('player peak-rating query', () =>
+      getEligiblePeakRating(accountId, 'qualifying')),
+    timeWebStage('COTD division estimate', () =>
+      getCotdDivisionEstimate(state.rating)),
+    timeWebStage('player rating-history query', () =>
+      getRecentEligibleRatingHistory(accountId, 120)),
+    timeWebStage('chart rank-band query', () =>
+      getRankThresholdBands()),
   ]);
 
   return {
@@ -195,6 +255,23 @@ async function getCotdDetail(cupId: number) {
   };
 }
 
+async function getPlayerCotdResultsFromDatabase(accountId: string, page: number, limit: number) {
+  const offset = (page - 1) * limit;
+  return timeWebStage('player COTD results page query', () =>
+    queryPlayerCotdResults(accountId, limit, offset));
+}
+
+async function getDuelCupResultsPage(
+  firstAccountId: string,
+  secondAccountId: string,
+  page: number,
+  limit: number,
+) {
+  const offset = (page - 1) * limit;
+  return timeWebStage('player duel COTD page query', () =>
+    getDuelCupResults(firstAccountId, secondAccountId, limit, offset));
+}
+
 export const websiteData: WebsiteDataSource = {
   rankOptions: TRACKMANIA_RANKS.map(rank => ({ code: rank.code, label: rank.name })),
   findAccountIdByUsername,
@@ -202,5 +279,7 @@ export const websiteData: WebsiteDataSource = {
   getLeaderboardPage,
   getRecentProcessedCotdDays,
   getPlayerProfile,
+  getPlayerCotdResults: getPlayerCotdResultsFromDatabase,
   getCotdDetail,
+  getDuelCupResults: getDuelCupResultsPage,
 };
