@@ -10,7 +10,11 @@ let responses: Response[] = [];
 const fetchMock = mock(async (_input: RequestInfo | URL, _init?: RequestInit) =>
   responses.shift() ?? new Response(null, { status: 500 })
 );
-globalThis.fetch = fetchMock;
+Object.defineProperty(globalThis, 'fetch', {
+  configurable: true,
+  writable: true,
+  value: fetchMock,
+});
 
 const {
   findAccountIdByUsername,
@@ -20,7 +24,11 @@ const {
 } = await import('../src/services/accountLookup');
 
 afterAll(() => {
-  globalThis.fetch = originalFetch;
+  Object.defineProperty(globalThis, 'fetch', {
+    configurable: true,
+    writable: true,
+    value: originalFetch,
+  });
 });
 
 test('display-name lookup respects Retry-After and persists each successful batch', async () => {
