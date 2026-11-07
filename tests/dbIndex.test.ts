@@ -23,6 +23,8 @@ const schema = await import('../src/db/schema');
 const migrationStatements = [
   '0000_initial-libsql-schema.sql',
   '0001_eligible-player-rank-index.sql',
+  '0002_daily-update-runs.sql',
+  '0003_player-display-names.sql',
 ].flatMap(fileName =>
   readFileSync(fileURLToPath(new URL(`../drizzle/${fileName}`, import.meta.url)), 'utf8')
     .split('--> statement-breakpoint')
@@ -39,6 +41,8 @@ beforeEach(async () => {
   await database.db.delete(schema.playerRatingHistoryTable);
   await database.db.delete(schema.challengeLeaderboardsTable);
   await database.db.delete(schema.playerRatingStateTable);
+  await database.db.delete(schema.playerDisplayNamesTable);
+  await database.db.delete(schema.dailyUpdateRunsTable);
   await database.db.delete(schema.cotdDaysTable);
 });
 
@@ -94,6 +98,37 @@ function makeIdempotent(statement: string): string {
     .replace('CREATE INDEX ', 'CREATE INDEX IF NOT EXISTS ');
 }
 
+test('player display names persist updates and support case-insensitive substring search', async () => {
+  await database.upsertPlayerRatingState('fast-player', 'qualifying', createState('fast-player', {
+    rating: 2_000,
+  }));
+  await database.upsertPlayerRatingState('steady-player', 'qualifying', createState('steady-player', {
+    rating: 1_800,
+  }));
+  await database.upsertPlayerRatingState('unranked-player', 'qualifying', createState('unranked-player', {
+    matchCount: 9,
+  }));
+  await database.savePlayerDisplayNames([
+    { accountId: 'fast-player', displayName: 'Speedy Racer' },
+    { accountId: 'steady-player', displayName: 'Steady Racer' },
+    { accountId: 'unranked-player', displayName: 'Unranked Racer' },
+  ]);
+
+  expect(await database.getCachedPlayerDisplayNames(['fast-player', 'missing'])).toEqual(
+    new Map([['fast-player', 'Speedy Racer']]),
+  );
+  expect(await database.findAccountIdByDisplayName('SPEEDY RACER')).toBe('fast-player');
+  expect(await database.searchPlayerDisplayNames('rAcEr', 10)).toEqual([
+    { accountId: 'fast-player', displayName: 'Speedy Racer', rating: 2_000, rank: 1 },
+    { accountId: 'steady-player', displayName: 'Steady Racer', rating: 1_800, rank: 2 },
+  ]);
+
+  await database.savePlayerDisplayNames([{ accountId: 'fast-player', displayName: 'New Name' }]);
+  expect(await database.findAccountIdByDisplayName('new name')).toBe('fast-player');
+  expect(await database.findAccountIdByDisplayName('speedy racer')).toBeNull();
+  expect(await database.getAllPlayerAccountIds()).toEqual(['fast-player', 'steady-player', 'unranked-player']);
+});
+
 test('rating helpers create defaults, upsert state, and calculate eligible leaderboard positions', async () => {
   expect(database.leaderboardScore(1_700, 100)).toBe(1_650);
   const missing = await database.getPlayerRatingState('missing', 'qualifying');
@@ -132,8 +167,36 @@ test('rating helpers create defaults, upsert state, and calculate eligible leade
     states: [],
     total: 0,
   });
+
   await expect(database.getPlayerRatingStatesByRankRange('qualifying', 0, 1)).rejects.toThrow('positive integer');
   await expect(database.getPlayerRatingStatesByRankRange('qualifying', 1, 0)).rejects.toThrow('positive integer');
+});
+
+test('daily update runs record starts, successes, and failures', async () => {
+  const { runTrackedDailyUpdate } = await import('../src/jobs/trackedDailyUpdate');
+
+  const runningId = await database.startDailyUpdateRun();
+  expect(typeof runningId).toBe('number');
+  const runningStatus = await database.getDailyUpdateStatus();
+  expect(runningStatus.latestRun?.status).toBe('running');
+  expect(runningStatus.latestRun?.completedAt).toBeNull();
+  expect(runningStatus.lastSuccessfulRun).toBeNull();
+  await database.finishDailyUpdateRun(runningId, 'succeeded');
+
+  await runTrackedDailyUpdate(async () => {});
+  const successfulStatus = await database.getDailyUpdateStatus();
+  expect(successfulStatus.latestRun?.status).toBe('succeeded');
+  expect(successfulStatus.latestRun?.completedAt).toBeInstanceOf(Date);
+  expect(successfulStatus.lastSuccessfulRun?.status).toBe('succeeded');
+
+  const failure = new Error('test daily update failure');
+  await expect(runTrackedDailyUpdate(async () => {
+    throw failure;
+  })).rejects.toBe(failure);
+  const failedStatus = await database.getDailyUpdateStatus();
+  expect(failedStatus.latestRun?.status).toBe('failed');
+  expect(failedStatus.latestRun?.completedAt).toBeInstanceOf(Date);
+  expect(failedStatus.lastSuccessfulRun?.status).toBe('succeeded');
 });
 
 test('COTD storage lists pending, processed, and leaderboard-incomplete cups', async () => {

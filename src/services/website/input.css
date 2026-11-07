@@ -114,6 +114,9 @@
   .pagination a { @apply rounded-lg border border-[#354151] px-3 py-1.5 font-medium hover:border-[#45c9b5] hover:bg-[#45c9b5]/10; }
   .data-freshness { @apply mb-5 rounded-lg border border-[#28554f] bg-[#12231f] px-3 py-2 text-sm text-[#9de4d8]; }
   .data-freshness-stale, .data-freshness-unavailable { @apply border-[#6a4b35] bg-[#261e18] text-[#f0c48d]; }
+  .data-freshness p { @apply my-1; }
+  .data-freshness-warning { @apply text-[#f0c48d]; }
+  .search-help { @apply basis-full text-sm; }
   .list { @apply list-none p-0; }
   .list li { @apply border-b border-[#293442] py-3; }
   .list li:last-child { @apply border-0; }

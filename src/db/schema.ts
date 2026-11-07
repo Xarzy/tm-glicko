@@ -68,6 +68,24 @@ export const playerRatingHistoryTable = sqliteTable('player_rating_history', {
   cupIdx: index('idx_rating_history_cup_id').on(table.cupId),
 }));
 
+export const dailyUpdateRunsTable = sqliteTable('daily_update_runs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  status: text('status', { enum: ['running', 'succeeded', 'failed'] }).notNull(),
+  startedAt: integer('started_at', { mode: 'timestamp' }).notNull(),
+  completedAt: integer('completed_at', { mode: 'timestamp' }),
+}, (table) => ({
+  startedAtIdx: index('idx_daily_update_runs_started_at').on(table.startedAt),
+}));
+
+export const playerDisplayNamesTable = sqliteTable('player_display_names', {
+  accountId: text('account_id').primaryKey(),
+  displayName: text('display_name').notNull(),
+  normalizedName: text('normalized_name').notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull(),
+}, (table) => ({
+  normalizedNameIdx: index('idx_player_display_names_normalized_name').on(table.normalizedName),
+}));
+
 export type InsertPlayerRatingState = typeof playerRatingStateTable.$inferInsert;
 export type SelectPlayerRatingState = typeof playerRatingStateTable.$inferSelect;
 export type InsertCotdDay = typeof cotdDaysTable.$inferInsert;
@@ -76,3 +94,5 @@ export type InsertChallengeLeaderboard = typeof challengeLeaderboardsTable.$infe
 export type SelectChallengeLeaderboard = typeof challengeLeaderboardsTable.$inferSelect;
 export type InsertPlayerRatingHistory = typeof playerRatingHistoryTable.$inferInsert;
 export type SelectPlayerRatingHistory = typeof playerRatingHistoryTable.$inferSelect;
+export type SelectDailyUpdateRun = typeof dailyUpdateRunsTable.$inferSelect;
+export type SelectPlayerDisplayName = typeof playerDisplayNamesTable.$inferSelect;

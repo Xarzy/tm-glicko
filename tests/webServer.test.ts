@@ -91,7 +91,24 @@ function createDataSource(overrides: Partial<WebsiteDataSource> = {}): WebsiteDa
   return {
     rankOptions: [{ code: 'master-1', label: 'Master 1' }],
     getLatestProcessedCotdAt: async () => cotdDay.processedAt,
+    getDailyUpdateStatus: async () => ({
+      latestRun: {
+        id: 1,
+        status: 'succeeded',
+        startedAt: cotdDay.processedAt!,
+        completedAt: cotdDay.processedAt!,
+      },
+      lastSuccessfulRun: {
+        id: 1,
+        status: 'succeeded',
+        startedAt: cotdDay.processedAt!,
+        completedAt: cotdDay.processedAt!,
+      },
+    }),
     findAccountIdByUsername: async username => username === 'Player' ? accountId : null,
+    searchPlayerSuggestions: async (query, limit) => 'Player'.toLowerCase().includes(query.toLowerCase())
+      ? [{ accountId, username: 'Player', rating: 2600, rank: 1 }].slice(0, limit)
+      : [],
     getDisplayNames: async () => new Map(),
     getLeaderboardPage: async () => ({ entries: [leaderboardEntry], total: 1 }),
     getRecentProcessedCotdDays: async () => [cotdDay],
@@ -208,27 +225,79 @@ test('shows latest COTD processing time and warns when data may be stale', async
 
   await withServer(createDataSource({
     getLatestProcessedCotdAt: async () => recentUpdate,
+    getDailyUpdateStatus: async () => ({
+      latestRun: { id: 1, status: 'succeeded', startedAt: recentUpdate, completedAt: recentUpdate },
+      lastSuccessfulRun: { id: 1, status: 'succeeded', startedAt: recentUpdate, completedAt: recentUpdate },
+    }),
   }), async baseUrl => {
     const response = await fetchPage(`${baseUrl}/leaderboard`);
     const html = await response.text();
     expect(html).toContain('Latest processed COTD');
     expect(html).toContain(recentUpdate.toISOString());
     expect(html).toContain('UTC');
-    expect(html).not.toContain('Data may be stale');
+    expect(html).toContain('The last daily update succeeded.');
+    expect(html).toContain('Last successful update');
+    expect(html).not.toContain('No successful daily update');
   });
 
   await withServer(createDataSource({
     getLatestProcessedCotdAt: async () => staleUpdate,
+    getDailyUpdateStatus: async () => ({
+      latestRun: { id: 2, status: 'succeeded', startedAt: staleUpdate, completedAt: staleUpdate },
+      lastSuccessfulRun: { id: 2, status: 'succeeded', startedAt: staleUpdate, completedAt: staleUpdate },
+    }),
   }), async baseUrl => {
     const response = await fetchPage(`${baseUrl}/leaderboard`);
-    expect(await response.text()).toContain('Data may be stale');
+    expect(await response.text()).toContain('Last successful update is over 36 hours old');
+  });
+
+  await withServer(createDataSource({
+    getLatestProcessedCotdAt: async () => recentUpdate,
+    getDailyUpdateStatus: async () => ({
+      latestRun: { id: 2, status: 'running', startedAt: recentUpdate, completedAt: null },
+      lastSuccessfulRun: { id: 1, status: 'succeeded', startedAt: recentUpdate, completedAt: recentUpdate },
+    }),
+  }), async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/leaderboard`);
+    expect(await response.text()).toContain('A daily update is currently running.');
+  });
+
+  await withServer(createDataSource({
+    getLatestProcessedCotdAt: async () => staleUpdate,
+    getDailyUpdateStatus: async () => ({
+      latestRun: { id: 2, status: 'running', startedAt: staleUpdate, completedAt: null },
+      lastSuccessfulRun: { id: 1, status: 'succeeded', startedAt: staleUpdate, completedAt: staleUpdate },
+    }),
+  }), async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/leaderboard`);
+    const html = await response.text();
+    expect(html).toContain('A daily update has been running for over 36 hours.');
+    expect(html).toContain('Last successful update is over 36 hours old');
+  });
+
+  await withServer(createDataSource({
+    getLatestProcessedCotdAt: async () => staleUpdate,
+    getDailyUpdateStatus: async () => ({
+      latestRun: { id: 2, status: 'failed', startedAt: staleUpdate, completedAt: staleUpdate },
+      lastSuccessfulRun: { id: 1, status: 'succeeded', startedAt: recentUpdate, completedAt: recentUpdate },
+    }),
+  }), async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/leaderboard`);
+    const html = await response.text();
+    expect(html).toContain('The last daily update failed.');
+    expect(html).toContain('Last successful update ·');
+    expect(html).toContain(recentUpdate.toISOString());
   });
 
   await withServer(createDataSource({
     getLatestProcessedCotdAt: async () => null,
+    getDailyUpdateStatus: async () => ({ latestRun: null, lastSuccessfulRun: null }),
   }), async baseUrl => {
     const response = await fetchPage(`${baseUrl}/leaderboard`);
-    expect(await response.text()).toContain('No processed COTD data is available yet.');
+    const html = await response.text();
+    expect(html).toContain('No processed COTD data is available yet.');
+    expect(html).toContain('No daily update has been recorded.');
+    expect(html).toContain('No successful daily update has been recorded.');
   });
 });
 
@@ -425,6 +494,35 @@ test('search redirects exact matches to shareable profiles and escapes misses', 
     expect(missing.status).toBe(200);
     expect(html).toContain('&lt;script&gt;');
     expect(html).not.toContain('<script>alert(1)</script>');
+  });
+});
+
+test('suggests partial player-name matches after exact lookup misses', async () => {
+  let suggestionQuery = '';
+  let suggestionCalls = 0;
+  const data = createDataSource({
+    searchPlayerSuggestions: async (query, limit) => {
+      suggestionCalls += 1;
+      suggestionQuery = query;
+      return [{ accountId, username: 'Player Name', rating: 2_600, rank: 12 }].slice(0, limit);
+    },
+  });
+
+  await withServer(data, async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/leaderboard?q=lay`);
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(suggestionQuery).toBe('lay');
+    expect(html).toContain('aria-label="Player search suggestions"');
+    expect(html).toContain('Player Name');
+    expect(html).toContain('#12');
+    expect(html).toContain('href="/players/player-123"');
+    expect(html).toContain('cached display names of all eligible players');
+
+    const shortQuery = await fetchPage(`${baseUrl}/leaderboard?q=p`);
+    expect(await shortQuery.text()).toContain('No exact Trackmania username match for “p”.');
+    expect(suggestionCalls).toBe(1);
   });
 });
 
