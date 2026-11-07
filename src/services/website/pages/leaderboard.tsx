@@ -74,7 +74,7 @@ export async function renderLeaderboard(
           rankOptions={data.rankOptions}
           value={query}
           selectedTier={selectedTier}
-          searchDescription="Partial-name suggestions search the cached display names of all eligible players."
+          searchDescription="Partial-name suggestions search cached names first; if there are no matches, Trackmania lookup checks the 250 highest-rated eligible players."
         />
         {query.length >= 2 && <PlayerSearchSuggestions
           suggestions={await timeWebStage(
