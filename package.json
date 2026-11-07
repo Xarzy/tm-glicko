@@ -5,6 +5,7 @@
   "scripts": {
     "build:css": "tailwindcss -i src/services/website/input.css -o public/site.css --minify",
     "start": "bun run src/index.ts",
+    "website": "bun -e \"import('./src/services/website/server.ts').then(({startWebServer}) => startWebServer(4173))\""
     "import-db": "bun run scripts/importLocalDatabase.ts",
     "test": "bun run build:css && bun test --parallel --timeout 30000",
     "test:cov": "bun run build:css && bun test --coverage --parallel --timeout 30000",

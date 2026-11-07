@@ -90,6 +90,7 @@ const leaderboardEntry: WebsiteLeaderboardEntry = {
 function createDataSource(overrides: Partial<WebsiteDataSource> = {}): WebsiteDataSource {
   return {
     rankOptions: [{ code: 'master-1', label: 'Master 1' }],
+    getLatestProcessedCotdAt: async () => cotdDay.processedAt,
     findAccountIdByUsername: async username => username === 'Player' ? accountId : null,
     getDisplayNames: async () => new Map(),
     getLeaderboardPage: async () => ({ entries: [leaderboardEntry], total: 1 }),
@@ -198,6 +199,36 @@ test('serves a searchable, paginated leaderboard and recent COTDs', async () => 
     expect(secondPage.status).toBe(200);
     expect(requestedPage).toBe(2);
     expect(requestedTier).toBe('master-1');
+  });
+});
+
+test('shows latest COTD processing time and warns when data may be stale', async () => {
+  const recentUpdate = new Date(Date.now() - 60 * 60 * 1_000);
+  const staleUpdate = new Date(Date.now() - 48 * 60 * 60 * 1_000);
+
+  await withServer(createDataSource({
+    getLatestProcessedCotdAt: async () => recentUpdate,
+  }), async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/leaderboard`);
+    const html = await response.text();
+    expect(html).toContain('Latest processed COTD');
+    expect(html).toContain(recentUpdate.toISOString());
+    expect(html).toContain('UTC');
+    expect(html).not.toContain('Data may be stale');
+  });
+
+  await withServer(createDataSource({
+    getLatestProcessedCotdAt: async () => staleUpdate,
+  }), async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/leaderboard`);
+    expect(await response.text()).toContain('Data may be stale');
+  });
+
+  await withServer(createDataSource({
+    getLatestProcessedCotdAt: async () => null,
+  }), async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/leaderboard`);
+    expect(await response.text()).toContain('No processed COTD data is available yet.');
   });
 });
 
@@ -584,6 +615,7 @@ test('serves linked terms of service and privacy policy pages', async () => {
     const homeHtml = await home.text();
     expect(homeHtml).toContain('href="/terms">Terms of Service</a>');
     expect(homeHtml).toContain('href="/privacy">Privacy Policy</a>');
+    expect(homeHtml).toContain('href="/ratings">How ratings work</a>');
 
     const terms = await fetch(`${baseUrl}/terms`);
     const termsHtml = await terms.text();
@@ -599,6 +631,13 @@ test('serves linked terms of service and privacy policy pages', async () => {
     expect(privacyHtml).toContain('Discord account identifiers');
     expect(privacyHtml).toContain('Spanish Data Protection Agency (AEPD)');
     expect(privacyHtml).toContain('mailto:');
+
+    const ratings = await fetch(`${baseUrl}/ratings`);
+    const ratingsHtml = await ratings.text();
+    expect(ratings.status).toBe(200);
+    expect(ratingsHtml).toContain('>How ratings work</h1>');
+    expect(ratingsHtml).toContain('at least 10 processed COTDs');
+    expect(ratingsHtml).toContain('calibrated Glicko-2 model');
   });
 });
 

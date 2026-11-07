@@ -384,6 +384,15 @@ export async function getRecentProcessedCotdDays(limit = 20): Promise<SelectCotd
     .limit(limit);
 }
 
+export async function getLatestProcessedCotdAt(): Promise<Date | null> {
+  const [latest] = await db.select({ processedAt: cotdDaysTable.processedAt })
+    .from(cotdDaysTable)
+    .where(and(isNotNull(cotdDaysTable.processedAt), gt(cotdDaysTable.cardinal, 0)))
+    .orderBy(sql`${cotdDaysTable.processedAt} DESC`)
+    .limit(1);
+  return latest?.processedAt ?? null;
+}
+
 export async function getCotdResults(cupId: number, limit = 100): Promise<
   { player: string; rank: number; score: number | null }[]
 > {

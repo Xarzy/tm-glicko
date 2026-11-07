@@ -4,6 +4,7 @@ import {
   getEligiblePeakRating,
   getEligibleRatingPlayerCount,
   getDuelCupResults,
+  getLatestProcessedCotdAt,
   getPlayerCotdResults as queryPlayerCotdResults,
   getPlayerRatingStateIfExists,
   getPlayerRatingStatesByRankRange,
@@ -110,6 +111,7 @@ export interface WebsiteDuelCupPage {
 
 export interface WebsiteDataSource {
   rankOptions: { code: string; label: string }[];
+  getLatestProcessedCotdAt(): Promise<Date | null>;
   findAccountIdByUsername(username: string): Promise<string | null>;
   getDisplayNames(accountIds: string[]): Promise<Map<string, string>>;
   getLeaderboardPage(page: number, limit: number, tierCode?: string): Promise<{ entries: WebsiteLeaderboardEntry[]; total: number }>;
@@ -274,6 +276,7 @@ async function getDuelCupResultsPage(
 
 export const websiteData: WebsiteDataSource = {
   rankOptions: TRACKMANIA_RANKS.map(rank => ({ code: rank.code, label: rank.name })),
+  getLatestProcessedCotdAt,
   findAccountIdByUsername,
   getDisplayNames,
   getLeaderboardPage,

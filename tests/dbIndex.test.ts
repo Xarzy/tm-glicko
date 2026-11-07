@@ -157,6 +157,11 @@ test('COTD storage lists pending, processed, and leaderboard-incomplete cups', a
   expect((await database.getRecentProcessedCotdDays()).map(day => day.cupId)).toEqual([
     20261002,
   ]);
+  expect(await database.getLatestProcessedCotdAt()).toEqual(expect.any(Date));
+  await database.db.update(schema.cotdDaysTable)
+    .set({ processedAt: new Date('2026-10-02T18:00:00Z') })
+    .where(sql`${schema.cotdDaysTable.cupId} = 20261002`);
+  expect(await database.getLatestProcessedCotdAt()).toEqual(new Date('2026-10-02T18:00:00Z'));
   expect((await database.getCupsNeedingLeaderboards()).map(day => day.cupId)).toEqual([
     20261001, 20261003, 20261004,
   ]);
@@ -169,6 +174,7 @@ test('COTD storage lists pending, processed, and leaderboard-incomplete cups', a
   expect(processed?.qualifierChallengeId).toBe(1004);
   expect(processed?.cardinal).toBe(400);
   expect(processed?.processedAt).toBeInstanceOf(Date);
+  expect(await database.getLatestProcessedCotdAt()).toEqual(processed?.processedAt ?? null);
 
   await database.saveChallengeLeaderboard(1001, [
     { player: 'second', rank: 2, score: 900 },

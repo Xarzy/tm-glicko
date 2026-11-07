@@ -140,6 +140,7 @@ The bot registers slash commands from `src/commands/`:
 - `/players/:accountId` — shareable player profile with rank, rating, COTD division estimate, eligible-era peak, recent placements, and rating history
 - `/cotd` — browse recent processed COTDs
 - `/cotd/:cupId` — view the top 100 available placements for a COTD
+- `/ratings` — explanation of rating eligibility, tiers, and history
 - `/terms` — Terms of Service
 - `/privacy` — Privacy Policy
 - `/health` — JSON health check for hosting platforms
@@ -147,6 +148,10 @@ The bot registers slash commands from `src/commands/`:
 Only players with at least 10 completed COTDs appear as ranked players. The
 leaderboard and COTD player names use Trackmania's display-name API when OAuth
 credentials are configured; otherwise account IDs are shown.
+
+The leaderboard shows when the newest processed COTD was recorded. Data older
+than 36 hours is flagged as potentially stale; this timestamp does not indicate
+whether an automated job failed.
 
 ## Data flow
 

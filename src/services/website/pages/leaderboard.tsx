@@ -2,6 +2,7 @@ import type { WebsiteDataSource } from '../data';
 import { formatRating, htmlResponse } from '../html';
 import { timeWebStage } from '../timing';
 import { CotdList } from '../components/cotd-list';
+import { DataFreshness } from '../components/data-freshness';
 
 const PAGE_SIZE = 25;
 
@@ -59,12 +60,17 @@ export async function renderLeaderboard(
     'leaderboard data load',
     () => data.getLeaderboardPage(page, PAGE_SIZE, selectedTier || undefined),
   );
+  const latestProcessedAt = await timeWebStage(
+    'latest processed COTD timestamp',
+    () => data.getLatestProcessedCotdAt(),
+  );
   const recentCotds = showRecentCotds
     ? await timeWebStage('recent COTD query', () => data.getRecentProcessedCotdDays(10))
     : null;
   const content = <>
     <h1>Glicko Leaderboard</h1>
     <p className="intro">COTD qualifying ratings for eligible players, ordered by rating.</p>
+    <DataFreshness lastProcessedAt={latestProcessedAt} />
     <SearchForm rankOptions={data.rankOptions} selectedTier={selectedTier} />
     <section className="table-wrap">
       <table>

@@ -34,9 +34,11 @@ export function Layout({
     </head>
     <body className="m-0 min-h-screen bg-[#10151e] font-sans leading-6 text-[#edf2f7]">
       <header className="border-b border-[#28313d] bg-[#151b25]">
-        <nav className="mx-auto flex min-h-16 w-[min(1100px,calc(100%-32px))] items-center gap-6 max-[560px]:gap-3">
+        <nav aria-label="Primary navigation" className="mx-auto flex min-h-16 w-[min(1100px,calc(100%-32px))] items-center gap-6 max-[560px]:min-h-0 max-[560px]:flex-wrap max-[560px]:gap-3 max-[560px]:py-3">
           <strong className="mr-auto text-lg text-white"><a href="/">TM Glicko</a></strong>
-          <a href="/leaderboard">Leaderboard</a><a href="/duel">Duel</a><a href="/cotd">COTDs</a>
+          <div className="site-nav-links flex flex-wrap items-center gap-5 max-[560px]:w-full max-[560px]:justify-between max-[560px]:gap-x-3 max-[560px]:gap-y-2 max-[560px]:text-sm">
+            <a href="/leaderboard">Leaderboard</a><a href="/duel">Duel</a><a href="/cotd">COTDs</a><a href="/ratings">How ratings work</a>
+          </div>
         </nav>
       </header>
       <main id="main-content" data-initial-load={initialLoad ? 'true' : undefined} className="mx-auto w-[min(1100px,calc(100%-32px))] py-8 pb-14 max-[560px]:pt-6">
@@ -50,7 +52,7 @@ export function Layout({
       </main>
       <footer className="border-t border-[#28313d] p-5 text-center text-sm text-[#8290a1]">
         Trackmania COTD ratings · Ranked after {MIN_RANKED_COTDS} completed COTDs ·{' '}
-        <a href="/terms">Terms of Service</a> · <a href="/privacy">Privacy Policy</a>
+        <a href="/ratings">How ratings work</a> · <a href="/terms">Terms of Service</a> · <a href="/privacy">Privacy Policy</a>
       </footer>
     </body>
   </html>;
