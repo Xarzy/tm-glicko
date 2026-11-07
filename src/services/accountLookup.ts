@@ -1,5 +1,23 @@
 import { getOAuthToken } from './trackmaniaOAuth';
 
+interface FindUsernamesOptions {
+  minDelayMs?: number;
+  onBatchComplete?: (progress: { completed: number; total: number; found: number }) => void;
+  onBatchResults?: (names: Map<string, string>) => Promise<void>;
+}
+
+function getRetryAfterMs(value: string | null, fallbackMs: number): number {
+  if (!value) return fallbackMs;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const retryAt = Date.parse(value);
+  return Number.isNaN(retryAt) ? fallbackMs : Math.max(0, retryAt - Date.now());
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
 export async function findAccountIdByUsername(username: string): Promise<string | null> {
   const map = await findAccountIdsByUsernames([username]);
   return map.get(username.toLowerCase()) ?? null;
@@ -34,17 +52,22 @@ export async function findAccountIdsByUsernames(usernames: string[]): Promise<Ma
   }
   return map;
 }
-export async function findUsernamesByAccountIds(accountIds: string[]): Promise<Map<string, string>> {
+export async function findUsernamesByAccountIds(
+  accountIds: string[],
+  { minDelayMs = 0, onBatchComplete, onBatchResults }: FindUsernamesOptions = {},
+): Promise<Map<string, string>> {
   if (accountIds.length === 0) return new Map();
   const token = await getOAuthToken();
   const map = new Map<string, string>();
 
   const CHUNK = 50;
+  const totalBatches = Math.ceil(accountIds.length / CHUNK);
+  let retries = 0;
   for (let i = 0; i < accountIds.length; i += CHUNK) {
+    if (i > 0 && minDelayMs > 0) await delay(minDelayMs);
     const chunk = accountIds.slice(i, i + CHUNK);
     const query = chunk.map(id => `accountId[]=${encodeURIComponent(id)}`).join('&');
     const url = `https://api.trackmania.com/api/display-names?${query}`;
-
     try {
       const res = await fetch(url, {
         headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'tm-glicko (contact: admin)' },
@@ -54,10 +77,31 @@ export async function findUsernamesByAccountIds(accountIds: string[]): Promise<M
         for (const [id, name] of Object.entries(data)) {
           map.set(id, name);
         }
+        await onBatchResults?.(new Map(Object.entries(data)));
+        retries = 0;
+      } else {
+        if (res.status !== 429 || retries >= 4) {
+          throw new Error(
+            `Trackmania display-name batch ${Math.floor(i / CHUNK) + 1}/${totalBatches} failed with HTTP ${res.status}.`,
+          );
+        }
+        const retryDelayMs = getRetryAfterMs(res.headers.get('Retry-After'), 60_000 * 2 ** retries);
+        retries++;
+        console.warn(
+          `[accountLookup] display-name batch ${Math.floor(i / CHUNK) + 1}/${totalBatches} received HTTP 429; retrying in ${Math.ceil(retryDelayMs / 1000)}s (retry ${retries}/4).`,
+        );
+        await delay(retryDelayMs);
+        i -= CHUNK;
+        continue;
       }
     } catch (err) {
-      console.error('[accountLookup] findUsernamesByAccountIds failed:', err);
+      throw err;
     }
+    onBatchComplete?.({
+      completed: Math.floor(i / CHUNK) + 1,
+      total: totalBatches,
+      found: map.size,
+    });
   }
 
   return map;

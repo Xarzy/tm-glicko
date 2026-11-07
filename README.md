@@ -147,10 +147,27 @@ The bot registers slash commands from `src/commands/`:
 
 Only players with at least 10 completed COTDs appear as ranked players. Player
 display names are cached in the database, so leaderboard and partial-name
-searches do not need a Trackmania API request once names have been cached.
-Daily updates backfill missing names and refresh the names of each new COTD's
-participants. Trackmania OAuth credentials are required to populate and refresh
-the cache; otherwise account IDs are shown.
+searches use the cache first. If an exact name or partial suggestion is not
+cached, the website falls back to Trackmania's API (partial suggestions check
+the 250 highest-rated eligible players) and caches any names it finds. Daily
+updates also backfill missing names and refresh names for new COTD participants.
+Trackmania OAuth credentials are required for these lookups; without them,
+cached names remain available and account IDs are used for uncached players.
+
+Run a one-time backfill for all known players with:
+
+```bash
+bun run names:backfill --dry-run
+```
+
+The dry run reports how many names are cached and how many API requests would
+be needed, without contacting Trackmania. Run `bun run names:backfill` to fetch
+missing names. Use `bun run names:backfill --refresh-all` to also refresh names
+already in the cache. The command prints progress after each API batch and
+waits between requests. On HTTP 429 it honors `Retry-After` and retries with
+increasing delays. Each successful batch is saved immediately, so rerunning the
+default command resumes with names still missing; avoid `--refresh-all` when
+resuming an interrupted backfill.
 
 The leaderboard freshness panel records the latest daily update and last
 successful completion. This status history is stored in the `daily_update_runs`

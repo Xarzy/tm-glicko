@@ -518,7 +518,8 @@ test('suggests partial player-name matches after exact lookup misses', async () 
     expect(html).toContain('Player Name');
     expect(html).toContain('#12');
     expect(html).toContain('href="/players/player-123"');
-    expect(html).toContain('cached display names of all eligible players');
+    expect(html).toContain('cached names first');
+    expect(html).toContain('250 highest-rated eligible players');
 
     const shortQuery = await fetchPage(`${baseUrl}/leaderboard?q=p`);
     expect(await shortQuery.text()).toContain('No exact Trackmania username match for “p”.');

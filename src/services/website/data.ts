@@ -14,13 +14,21 @@ import {
   getRecentEligibleRatingHistory,
   getRecentProcessedCotdDays,
   searchPlayerDisplayNames,
+  savePlayerDisplayNames,
 } from '../../db';
 import {
   MIN_RANKED_COTDS,
   type SelectCotdDay,
   type SelectPlayerRatingState,
 } from '../../db/schema';
-import { getDisplayNames as getCachedDisplayNames } from '../playerDisplayNames';
+import {
+  findAccountIdsByUsernames,
+  findUsernamesByAccountIds,
+} from '../accountLookup';
+import {
+  getDisplayNames as getCachedDisplayNames,
+  refreshPlayerDisplayNames,
+} from '../playerDisplayNames';
 import {
   formatTopPercentage,
   getCotdDivisionEstimate,
@@ -32,6 +40,8 @@ import {
   type PlayerRankTierInfo,
 } from '../rankService';
 import { timeWebStage } from './timing';
+
+const PLAYER_SEARCH_FALLBACK_LIMIT = 250;
 
 export interface WebsitePlayerHistoryPoint {
   cupId: number;
@@ -136,6 +146,19 @@ async function getDisplayNames(accountIds: string[]): Promise<Map<string, string
   return getCachedDisplayNames(accountIds);
 }
 
+async function findAccountIdByUsername(username: string): Promise<string | null> {
+  const cachedAccountId = await findAccountIdByDisplayName(username);
+  if (cachedAccountId) return cachedAccountId;
+
+  const accountIds = await timeWebStage(
+    'Trackmania exact username fallback',
+    () => findAccountIdsByUsernames([username]),
+  );
+  const accountId = accountIds.get(username.toLowerCase()) ?? null;
+  if (accountId) await refreshPlayerDisplayNames([accountId]);
+  return accountId;
+}
+
 async function getLeaderboardPage(page: number, limit: number, tierCode?: string) {
   let from = (page - 1) * limit + 1;
   let total = 0;
@@ -179,7 +202,36 @@ async function searchPlayerSuggestions(query: string, limit: number): Promise<We
     'player display-name database search',
     () => searchPlayerDisplayNames(normalizedQuery, Math.min(limit, 10)),
   );
-  return matches.map(({ displayName, ...player }) => ({ ...player, username: displayName }));
+  if (matches.length > 0) {
+    return matches.map(({ displayName, ...player }) => ({ ...player, username: displayName }));
+  }
+
+  const { states } = await timeWebStage(
+    'player search fallback candidate query',
+    () => getPlayerRatingStatesByRankRange('qualifying', 1, PLAYER_SEARCH_FALLBACK_LIMIT),
+  );
+  const candidateNames = await timeWebStage(
+    'Trackmania player search fallback names',
+    () => findUsernamesByAccountIds(states.map(state => state.accountId), {
+      minDelayMs: 1_000,
+      onBatchResults: async names => {
+        await savePlayerDisplayNames(
+          [...names].map(([accountId, displayName]) => ({ accountId, displayName })),
+        );
+      },
+    }),
+  );
+
+  return states.flatMap((state, index) => {
+    const username = candidateNames.get(state.accountId);
+    if (!username?.toLowerCase().includes(normalizedQuery)) return [];
+    return [{
+      accountId: state.accountId,
+      username,
+      rating: state.rating,
+      rank: index + 1,
+    }];
+  }).slice(0, Math.min(limit, 10));
 }
 
 async function getPlayerProfile(accountId: string): Promise<WebsitePlayerProfile | null> {
@@ -265,7 +317,7 @@ export const websiteData: WebsiteDataSource = {
   rankOptions: TRACKMANIA_RANKS.map(rank => ({ code: rank.code, label: rank.name })),
   getLatestProcessedCotdAt,
   getDailyUpdateStatus,
-  findAccountIdByUsername: findAccountIdByDisplayName,
+  findAccountIdByUsername,
   searchPlayerSuggestions,
   getDisplayNames,
   getLeaderboardPage,
