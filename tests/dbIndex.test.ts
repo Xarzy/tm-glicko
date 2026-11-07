@@ -200,7 +200,7 @@ test('daily update runs record starts, successes, and failures', async () => {
 
   const operationFailure = new Error('operation failed while status storage is unavailable');
   const originalError = console.error;
-  const errors = mock(() => {});
+  const errors = mock((..._args: unknown[]) => {});
   console.error = errors;
   try {
     await expect(runTrackedDailyUpdate(async () => {
