@@ -1,21 +1,17 @@
 import { Hono } from 'hono';
 import { join } from 'node:path';
-import type { WebsiteDataSource } from '../websiteData';
+import type { WebsiteDataSource } from './data';
 import { htmlLoadingResponse, htmlResponse, Layout } from './html';
 import { renderLegalPage } from './legalPages';
-import {
-  CotdList,
-  parsePaginationPage,
-  PLAYER_COTD_PAGE_SIZE,
-  renderCotdDetail,
-  renderDuel,
-  renderLeaderboard,
-  renderPlayerCotdResultsFragment,
-  renderPlayerProfile,
-} from './pages';
+import { renderLeaderboard } from './pages/leaderboard';
+import { renderDuel } from './pages/duel';
+import { CotdList } from './components/cotd-list';
+import { parsePaginationPage } from './components/pagination';
+import { renderCotdDetail } from './pages/cotd';
+import { PLAYER_COTD_PAGE_SIZE, renderPlayerCotdResultsFragment, renderPlayerProfile } from './pages/player';
 
 async function getDataSource(data?: WebsiteDataSource): Promise<WebsiteDataSource> {
-  return data ?? (await import('../websiteData')).websiteData;
+  return data ?? (await import('./data')).websiteData;
 }
 
 function initialPageResponse(request: Request, title: string): Response | null {
