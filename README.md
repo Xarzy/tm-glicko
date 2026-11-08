@@ -138,7 +138,7 @@ The bot registers slash commands from `src/commands/`:
 ## Website
 
 - `/` and `/leaderboard` — browse the eligible-player leaderboard by page, filter by competitive rank, find an exact Trackmania username, or search cached display names for partial matches
-- `/duel` — compare shared COTD results over a customizable “last N days, weeks, months, or years” duration; view win rates and rating trends, and copy a comparison link
+- `/duel` — compare shared COTD results all time or over a customizable “last N days, weeks, months, or years” duration; view win rates and rating trends, and copy a comparison link
 - `/players/:accountId` — shareable player profile with rank, rating, COTD division estimate, eligible-era peak, recent placements, and rating history
 - `/cotd` — browse recent processed COTDs
 - `/cotd/:cupId` — view the top 100 available placements for a COTD

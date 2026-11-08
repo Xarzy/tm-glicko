@@ -434,21 +434,26 @@ test('duel custom duration filters results and trends', async () => {
     const response = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second`);
     const html = await response.text();
     expect(response.status).toBe(200);
-    expect(html).not.toContain('name="period"');
+    expect(html).toContain('name="period" value="duration"');
+    expect(html).toContain('All time selected');
+    expect(html).toContain('All time · latest 500 eligible results');
     expect(html).toContain('name="duration"');
     expect(html).toContain('value="30"');
-    expect(html).toContain('Last 30 days');
+    expect(html).toContain('<option value="days" selected="">days</option>');
     expect(duelPeriods).toHaveLength(1);
-    const today = new Date();
-    const thirtyDaysAgo = new Date(today);
-    thirtyDaysAgo.setUTCDate(thirtyDaysAgo.getUTCDate() - 29);
-    expect(duelPeriods[0]).toEqual({
-      startDate: thirtyDaysAgo.toISOString().slice(0, 10),
-      endDate: today.toISOString().slice(0, 10),
-    });
+    expect(duelPeriods[0]).toEqual({ startDate: null, endDate: null });
     expect(trendPeriods).toEqual([duelPeriods[0], duelPeriods[0]]);
 
-    const custom = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&duration=2&durationUnit=weeks`);
+    const today = new Date();
+    const allTime = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&period=all`);
+    const allTimeHtml = await allTime.text();
+    expect(allTime.status).toBe(200);
+    expect(allTimeHtml).toContain('All time selected');
+    expect(allTimeHtml).toContain('All time · latest 500 eligible results');
+    expect(duelPeriods[1]).toEqual({ startDate: null, endDate: null });
+    expect(trendPeriods.slice(2)).toEqual([duelPeriods[1], duelPeriods[1]]);
+
+    const custom = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&period=duration&duration=2&durationUnit=weeks`);
     const customHtml = await custom.text();
     expect(custom.status).toBe(200);
     expect(customHtml).toContain('value="2"');
@@ -456,14 +461,14 @@ test('duel custom duration filters results and trends', async () => {
     expect(customHtml).toContain('Last 2 weeks');
     const twoWeeksAgo = new Date(today);
     twoWeeksAgo.setUTCDate(twoWeeksAgo.getUTCDate() - 13);
-    expect(duelPeriods[1]).toEqual({
+    expect(duelPeriods[2]).toEqual({
       startDate: twoWeeksAgo.toISOString().slice(0, 10),
       endDate: today.toISOString().slice(0, 10),
     });
-    expect(trendPeriods.slice(2)).toEqual([duelPeriods[1], duelPeriods[1]]);
+    expect(trendPeriods.slice(4)).toEqual([duelPeriods[2], duelPeriods[2]]);
 
     for (const [unit, singular] of [['days', 'day'], ['weeks', 'week'], ['months', 'month'], ['years', 'year']]) {
-      const durationResponse = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&duration=1&durationUnit=${unit}`);
+      const durationResponse = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&period=duration&duration=1&durationUnit=${unit}`);
       const durationHtml = await durationResponse.text();
       expect(durationResponse.status).toBe(200);
       expect(durationHtml).toContain(`Last 1 ${singular}`);
@@ -472,11 +477,13 @@ test('duel custom duration filters results and trends', async () => {
     }
 
     for (const invalidDuration of ['0', '-1', '1.5', '1001']) {
-      const invalid = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&duration=${invalidDuration}&durationUnit=days`);
+      const invalid = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&period=duration&duration=${invalidDuration}&durationUnit=days`);
       expect(invalid.status).toBe(400);
     }
-    const invalidUnit = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&duration=2&durationUnit=decades`);
+    const invalidUnit = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&period=duration&duration=2&durationUnit=decades`);
     expect(invalidUnit.status).toBe(400);
+    const invalidPeriod = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&period=forever`);
+    expect(invalidPeriod.status).toBe(400);
   });
 });
 
