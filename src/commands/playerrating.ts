@@ -4,6 +4,7 @@ import { getEligiblePeakRating, getPlayerRatingState, getPlayerRatingStateByRank
 import { MIN_RANKED_COTDS } from '../db/schema';
 import { formatTopPercentage, getCotdDivisionEstimate, getNextRankGoal, getPlayerTier } from '../services/rankService';
 import { getUncertaintyCategory } from '../services/ratingPresentation';
+import { getCotdUrl, getPlayerProfileUrl } from '../services/discordWebLinks';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { SelectPlayerRatingState } from '../db/schema';
@@ -148,6 +149,8 @@ export async function executePlayerRatingLookup(
     }
     : null;
 
+  const profileUrl = getPlayerProfileUrl(state.accountId);
+  const lastCotdUrl = lastCup ? getCotdUrl(lastCup.cupId) : null;
   const embed = new EmbedBuilder()
     .setColor(tierInfo.rank.tierColor)
     .setTitle(requestedRank === null ? `${username} Rating Info` : `Rank ${rank} (${username}) Rating Info`)
@@ -199,8 +202,14 @@ export async function executePlayerRatingLookup(
         name: 'Rating Uncertainty',
         value: uncertaintyDesc,
         inline: true,
-      }
+      },
+      ...(lastCup && lastCotdUrl ? [{
+        name: 'Latest COTD',
+        value: `[${escapeMarkdown(lastCup.name)}](${lastCotdUrl})`,
+        inline: false,
+      }] : []),
     );
+  if (profileUrl) embed.setURL(profileUrl);
 
   const files: AttachmentBuilder[] = [];
   const iconPath = join(process.cwd(), tierInfo.iconPath);

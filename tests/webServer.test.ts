@@ -120,6 +120,7 @@ function createDataSource(overrides: Partial<WebsiteDataSource> = {}): WebsiteDa
           ({ cupId, cotdDate, name, rank, rating, ratingChange })),
       total: history.length,
     }),
+    getPlayerRatingTrend: async () => history,
     getDuelCupResults: async (_firstAccountId, _secondAccountId, page, limit) => ({
       results: [],
       total: 0,
@@ -186,6 +187,12 @@ test('serves a searchable, paginated leaderboard and recent COTDs', async () => 
     expect(html).toContain('id="initial-loader"');
     expect(html).toContain('id="page-content"');
     expect(html).toContain("classList.add('document-loading')");
+    expect(html).toContain('<link rel="icon" href="/favicon.ico" sizes="any"/>');
+
+    const favicon = await fetch(`${baseUrl}/favicon.ico`);
+    expect(favicon.status).toBe(200);
+    expect(favicon.headers.get('content-type')).toContain('image/x-icon');
+    expect((await favicon.arrayBuffer()).byteLength).toBeGreaterThan(0);
 
     const stylesheet = await fetch(`${baseUrl}/assets/site.css`);
     expect(stylesheet.status).toBe(200);
@@ -376,6 +383,7 @@ test('compares exact-match players using their shared COTD placements', async ()
       secondWins: 1,
       draws: 1,
     }),
+    getPlayerRatingTrend: async () => history,
   });
 
   await withServer(data, async baseUrl => {
@@ -393,11 +401,82 @@ test('compares exact-match players using their shared COTD placements', async ()
     expect(html).toContain('First Player vs Second Player');
     expect(html).toContain('class="duel-hero duel-result-hero"');
     expect(html).toContain('class="duel-score">1 <span>–</span> 1</span>');
+    expect(html).toContain('data-copy-page-link');
+    expect(html).toContain('Share comparison');
+    expect(html).toContain('Rating trends');
+    expect(html).toContain('33.3%');
     expect(html).toContain('>1 tied cup</span>');
     expect(html).toContain('3 shared cups');
     expect(html).toContain('Cup 3');
     expect(html).toContain('First Player');
     expect(html).toContain('Second Player');
+  });
+});
+
+test('duel custom duration filters results and trends', async () => {
+  const duelPeriods: { startDate: string | null; endDate: string | null }[] = [];
+  const trendPeriods: { startDate: string | null; endDate: string | null }[] = [];
+  const data = createDataSource({
+    findAccountIdByUsername: async username => username === 'First'
+      ? 'first-account'
+      : username === 'Second' ? 'second-account' : null,
+    getDuelCupResults: async (_first, _second, _page, _limit, dateRange) => {
+      duelPeriods.push(dateRange);
+      return { results: [], total: 0, firstWins: 0, secondWins: 0, draws: 0 };
+    },
+    getPlayerRatingTrend: async (_accountId, dateRange) => {
+      trendPeriods.push(dateRange);
+      return [];
+    },
+  });
+
+  await withServer(data, async baseUrl => {
+    const response = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second`);
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(html).not.toContain('name="period"');
+    expect(html).toContain('name="duration"');
+    expect(html).toContain('value="30"');
+    expect(html).toContain('Last 30 days');
+    expect(duelPeriods).toHaveLength(1);
+    const today = new Date();
+    const thirtyDaysAgo = new Date(today);
+    thirtyDaysAgo.setUTCDate(thirtyDaysAgo.getUTCDate() - 29);
+    expect(duelPeriods[0]).toEqual({
+      startDate: thirtyDaysAgo.toISOString().slice(0, 10),
+      endDate: today.toISOString().slice(0, 10),
+    });
+    expect(trendPeriods).toEqual([duelPeriods[0], duelPeriods[0]]);
+
+    const custom = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&duration=2&durationUnit=weeks`);
+    const customHtml = await custom.text();
+    expect(custom.status).toBe(200);
+    expect(customHtml).toContain('value="2"');
+    expect(customHtml).toContain('<option value="weeks" selected="">weeks</option>');
+    expect(customHtml).toContain('Last 2 weeks');
+    const twoWeeksAgo = new Date(today);
+    twoWeeksAgo.setUTCDate(twoWeeksAgo.getUTCDate() - 13);
+    expect(duelPeriods[1]).toEqual({
+      startDate: twoWeeksAgo.toISOString().slice(0, 10),
+      endDate: today.toISOString().slice(0, 10),
+    });
+    expect(trendPeriods.slice(2)).toEqual([duelPeriods[1], duelPeriods[1]]);
+
+    for (const [unit, singular] of [['days', 'day'], ['weeks', 'week'], ['months', 'month'], ['years', 'year']]) {
+      const durationResponse = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&duration=1&durationUnit=${unit}`);
+      const durationHtml = await durationResponse.text();
+      expect(durationResponse.status).toBe(200);
+      expect(durationHtml).toContain(`Last 1 ${singular}`);
+      expect(duelPeriods.at(-1)?.endDate).toBe(new Date().toISOString().slice(0, 10));
+      expect(duelPeriods.at(-1)?.startDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+
+    for (const invalidDuration of ['0', '-1', '1.5', '1001']) {
+      const invalid = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&duration=${invalidDuration}&durationUnit=days`);
+      expect(invalid.status).toBe(400);
+    }
+    const invalidUnit = await fetchPage(`${baseUrl}/duel?player1=First&player2=Second&duration=2&durationUnit=decades`);
+    expect(invalidUnit.status).toBe(400);
   });
 });
 

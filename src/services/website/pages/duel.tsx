@@ -1,13 +1,58 @@
-import type { WebsiteDataSource } from '../data';
+import type { WebsiteDataSource, WebsiteDuelDateRange } from '../data';
 import { htmlResponse } from '../html';
 import { timeWebStage } from '../timing';
 import { Pagination, parsePaginationPage } from '../components/pagination';
+import { RatingChart } from '../components/rating-chart';
 
 export const DUEL_PAGE_SIZE = 20;
+const DURATION_UNITS = ['days', 'weeks', 'months', 'years'] as const;
+type DurationUnit = typeof DURATION_UNITS[number];
+const MAX_CUSTOM_DURATION = 1_000;
+
+function getDateRange(
+  duration: number,
+  durationUnit: DurationUnit,
+): WebsiteDuelDateRange {
+  const today = new Date();
+  const start = new Date(today);
+  if (durationUnit === 'days' || durationUnit === 'weeks') {
+    const days = duration * (durationUnit === 'weeks' ? 7 : 1);
+    start.setUTCDate(start.getUTCDate() - days + 1);
+  } else {
+    const months = duration * (durationUnit === 'years' ? 12 : 1);
+    const targetMonth = start.getUTCMonth() - months;
+    start.setUTCDate(1);
+    start.setUTCMonth(targetMonth);
+    const lastDay = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0)).getUTCDate();
+    start.setUTCDate(Math.min(today.getUTCDate(), lastDay));
+  }
+  return {
+    startDate: start.toISOString().slice(0, 10),
+    endDate: today.toISOString().slice(0, 10),
+  };
+}
+
+function formatWinRate(wins: number, sharedCups: number): string {
+  return sharedCups === 0 ? '—' : `${(wins / sharedCups * 100).toFixed(1)}%`;
+}
 
 export async function renderDuel(url: URL, data: WebsiteDataSource): Promise<Response> {
   const firstName = (url.searchParams.get('player1') ?? '').trim();
   const secondName = (url.searchParams.get('player2') ?? '').trim();
+  const rawDuration = url.searchParams.get('duration') ?? '30';
+  const duration = Number(rawDuration);
+  const rawDurationUnit = url.searchParams.get('durationUnit') ?? 'days';
+  if (
+    !/^\d+$/.test(rawDuration)
+    || !Number.isSafeInteger(duration)
+    || duration < 1
+    || duration > MAX_CUSTOM_DURATION
+    || !DURATION_UNITS.includes(rawDurationUnit as DurationUnit)
+  ) {
+    return htmlResponse('Player duel', <><h1>Invalid comparison duration</h1><p>Choose between 1 and {MAX_CUSTOM_DURATION} days, weeks, months, or years.</p></>, 400);
+  }
+  const durationUnit = rawDurationUnit as DurationUnit;
+  const dateRange = getDateRange(duration, durationUnit);
   const page = parsePaginationPage(url);
   if (page === null) {
     return htmlResponse('Player duel', <><h1>Invalid page</h1><p>Page must be a positive integer.</p></>, 400);
@@ -79,11 +124,16 @@ export async function renderDuel(url: URL, data: WebsiteDataSource): Promise<Res
 
   const [duel, names] = await Promise.all([
     timeWebStage('player duel shared COTD results', () =>
-      data.getDuelCupResults(firstAccountId, secondAccountId, page, DUEL_PAGE_SIZE)),
+      data.getDuelCupResults(firstAccountId, secondAccountId, page, DUEL_PAGE_SIZE, dateRange)),
     data.getDisplayNames([firstAccountId, secondAccountId]),
+  ]);
+  const [firstTrend, secondTrend] = await Promise.all([
+    data.getPlayerRatingTrend(firstAccountId, dateRange),
+    data.getPlayerRatingTrend(secondAccountId, dateRange),
   ]);
   const firstUsername = names.get(firstAccountId) ?? firstName;
   const secondUsername = names.get(secondAccountId) ?? secondName;
+  const periodLabel = `Last ${duration} ${duration === 1 ? durationUnit.slice(0, -1) : durationUnit}`;
   const pageCount = Math.ceil(duel.total / DUEL_PAGE_SIZE);
   if (pageCount > 0 && page > pageCount) {
     const redirectUrl = new URL(url);
@@ -97,11 +147,38 @@ export async function renderDuel(url: URL, data: WebsiteDataSource): Promise<Res
       <h1>{firstUsername} <span className="duel-title-vs">vs</span> {secondUsername}</h1>
       <p className="intro">Who took the most shared Cups of the Day?</p>
     </div>
-    <section className="duel-scoreboard" aria-label="Head-to-head record">
+      <div className="duel-share player-share">
+        <button className="player-share-button" type="button" data-copy-page-link
+          data-copy-page-label="Share comparison"
+          data-copy-success="Comparison link copied to clipboard."
+          aria-label="Copy link to this head-to-head comparison">
+          <svg aria-hidden="true" viewBox="0 0 20 20" fill="none">
+            <path d="M8.25 11.75a3.5 3.5 0 0 0 4.95 0l3-3a3.5 3.5 0 0 0-4.95-4.95l-1.72 1.72" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            <path d="M11.75 8.25a3.5 3.5 0 0 0-4.95 0l-3 3a3.5 3.5 0 0 0 4.95 4.95l1.72-1.72" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          </svg>
+          <span data-copy-page-label>Share comparison</span>
+        </button>
+        <span className="player-share-status" data-copy-page-status aria-live="polite" />
+      </div>
+      <form className="duel-period-form panel" action="/duel" method="get">
+        <input type="hidden" name="player1" value={firstName} />
+        <input type="hidden" name="player2" value={secondName} />
+        <div className="duel-duration-control">
+          <span>Last</span>
+          <input id="duel-duration" name="duration" type="number" min="1" max={MAX_CUSTOM_DURATION}
+            defaultValue={duration} aria-label="Duration number" />
+          <select id="duel-duration-unit" name="durationUnit" defaultValue={durationUnit}
+            aria-label="Duration unit">
+            {DURATION_UNITS.map(unit => <option key={unit} value={unit}>{unit}</option>)}
+          </select>
+        </div>
+        <button type="submit">Update comparison</button>
+      </form>
+      <section className="duel-scoreboard" aria-label="Head-to-head record">
       <div className="duel-contender duel-contender-first">
         <span className="duel-contender-label">PLAYER 1</span>
         <strong>{firstUsername}</strong>
-        <span className="duel-win-count">{duel.firstWins} <span>wins</span></span>
+        <span className="duel-win-count">{duel.firstWins} wins <span>· {formatWinRate(duel.firstWins, duel.total)} win rate</span></span>
       </div>
       <div className="duel-score-center">
         <span className="duel-score">{duel.firstWins} <span>–</span> {duel.secondWins}</span>
@@ -110,11 +187,20 @@ export async function renderDuel(url: URL, data: WebsiteDataSource): Promise<Res
       <div className="duel-contender duel-contender-second">
         <span className="duel-contender-label">PLAYER 2</span>
         <strong>{secondUsername}</strong>
-        <span className="duel-win-count">{duel.secondWins} <span>wins</span></span>
+        <span className="duel-win-count">{duel.secondWins} wins <span>· {formatWinRate(duel.secondWins, duel.total)} win rate</span></span>
       </div>
       <div className="duel-summary">
-        <span>{duel.total.toLocaleString('en-US')} shared {duel.total === 1 ? 'cup' : 'cups'}</span>
+        <span>{duel.total.toLocaleString('en-US')} shared {duel.total === 1 ? 'cup' : 'cups'} · {periodLabel}</span>
         {duel.draws > 0 && <span>{duel.draws} tied {duel.draws === 1 ? 'cup' : 'cups'}</span>}
+      </div>
+    </section>
+    <section className="duel-trends" aria-label="Rating trends">
+      <div className="duel-results-heading">
+        <div><h2>Rating trends</h2><p>{`${periodLabel} rating history`}</p></div>
+      </div>
+      <div className="duel-trend-grid">
+        <section className="panel"><h3>{firstUsername}</h3><RatingChart history={firstTrend} bands={[]} /></section>
+        <section className="panel"><h3>{secondUsername}</h3><RatingChart history={secondTrend} bands={[]} /></section>
       </div>
     </section>
     {duel.total === 0

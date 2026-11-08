@@ -128,7 +128,9 @@ export function renderPlayerProfile(
     <div className="player-profile-intro">
       <p className="intro">Trackmania player profile</p>
       <div className="player-share">
-        <button className="player-share-button" type="button" data-copy-page-link aria-label="Copy link to this player profile">
+        <button className="player-share-button" type="button" data-copy-page-link
+          data-copy-success="Profile link copied to clipboard."
+          aria-label="Copy link to this player profile">
           <svg aria-hidden="true" viewBox="0 0 20 20" fill="none">
             <path d="M8.25 11.75a3.5 3.5 0 0 0 4.95 0l3-3a3.5 3.5 0 0 0-4.95-4.95l-1.72 1.72" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
             <path d="M11.75 8.25a3.5 3.5 0 0 0-4.95 0l-3 3a3.5 3.5 0 0 0 4.95 4.95l1.72-1.72" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />

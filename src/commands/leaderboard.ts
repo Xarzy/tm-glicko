@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, escapeMarkdown } from 'discord.js';
 import { getPlayerRatingStatesByRankRange } from '../db';
 import { findUsernamesByAccountIds } from '../services/accountLookup';
+import { getPlayerProfileUrl } from '../services/discordWebLinks';
 
 export const data = new SlashCommandBuilder()
   .setName('leaderboard')
@@ -52,6 +53,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   const lastRank = rows[rows.length - 1].rank;
   const embed = new EmbedBuilder()
     .setTitle(`Glicko Leaderboard — #${firstRank}-#${lastRank}`)
+    .setURL(getPlayerProfileUrl(rows[0].state.accountId))
     .setColor(0x00f5d4);
 
   // Build a compact list: Rank. Name — Rating (Δ)
@@ -61,7 +63,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     const delta = state.previousRating !== null ? state.rating - state.previousRating : null;
     const deltaStr = delta === null ? 'Δ n/a' : `Δ ${formatSigned(delta)}`;
     const username = escapeMarkdown(usernameMap.get(state.accountId) ?? state.accountId);
-    return `#${rank} — ${username} — ${Math.round(state.rating)} (${deltaStr})`;
+    const profileUrl = getPlayerProfileUrl(state.accountId);
+    const linkedUsername = profileUrl ? `[${username}](${profileUrl})` : username;
+    return `#${rank} — ${linkedUsername} — ${Math.round(state.rating)} (${deltaStr})`;
   });
 
   const fields: { name: string; value: string; inline: false }[] = [];

@@ -15,12 +15,13 @@
     const label = button.querySelector('[data-copy-page-label]');
     const status = button.parentElement?.querySelector('[data-copy-page-status]');
     if (!(label instanceof HTMLElement) || !(status instanceof HTMLElement)) return;
+    const defaultLabel = button.dataset.copyPageLabel || label.textContent || 'Share link';
 
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable.');
       await navigator.clipboard.writeText(window.location.href);
       label.textContent = 'Copied!';
-      status.textContent = 'Profile link copied to clipboard.';
+      status.textContent = button.dataset.copySuccess || 'Profile link copied to clipboard.';
       button.dataset.copyState = 'copied';
     } catch {
       label.textContent = 'Copy failed';
@@ -29,7 +30,7 @@
     }
 
     window.setTimeout(() => {
-      label.textContent = 'Share profile';
+      label.textContent = defaultLabel;
       button.dataset.copyState = '';
     }, 2500);
   }

@@ -2,6 +2,7 @@ import {
   AttachmentBuilder,
   ChatInputCommandInteraction,
   SlashCommandBuilder,
+  escapeMarkdown,
 } from 'discord.js';
 import { findAccountIdByUsername, findUsernameByAccountId } from '../services/accountLookup';
 import {
@@ -17,6 +18,7 @@ import {
   getRankDivisionRatingRanges,
 } from '../services/rankService';
 import { renderPlayerCard } from '../services/playerCardRenderer';
+import { getCotdUrl, getPlayerProfileUrl } from '../services/discordWebLinks';
 import type { SelectPlayerRatingState } from '../db/schema';
 
 export const data = new SlashCommandBuilder()
@@ -127,7 +129,16 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     divisionRanges,
   });
 
+  const profileUrl = getPlayerProfileUrl(state.accountId);
+  const lastCotdUrl = lastCup ? getCotdUrl(lastCup.cupId) : null;
+  const links = [
+    profileUrl ? `[Open web profile](${profileUrl})` : null,
+    lastCup && lastCotdUrl
+      ? `[Latest COTD: ${escapeMarkdown(lastCup.name)}](${lastCotdUrl})`
+      : null,
+  ].filter((link): link is string => link !== null);
   await interaction.editReply({
+    content: links.join(' · ') || undefined,
     files: [new AttachmentBuilder(image, { name: 'player-card.png' })],
   });
 }

@@ -28,6 +28,7 @@ export function Layout({
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <meta name="theme-color" content="#10151e" />
       <title>{`${title} · TM Glicko`}</title>
+      <link rel="icon" href="/favicon.ico" sizes="any" />
       <script dangerouslySetInnerHTML={{ __html: `document.documentElement.classList.add('document-loading');window.__initialLoaderFallback=window.setTimeout(()=>document.documentElement.classList.remove('document-loading'),5000);` }} />
       <link rel="stylesheet" href="/assets/site.css" />
       <script src="/assets/site.js" defer />
