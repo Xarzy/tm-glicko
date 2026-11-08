@@ -39,20 +39,27 @@ function formatWinRate(wins: number, sharedCups: number): string {
 export async function renderDuel(url: URL, data: WebsiteDataSource): Promise<Response> {
   const firstName = (url.searchParams.get('player1') ?? '').trim();
   const secondName = (url.searchParams.get('player2') ?? '').trim();
+  const rawPeriod = url.searchParams.get('period') ?? 'all';
+  if (rawPeriod !== 'duration' && rawPeriod !== 'all') {
+    return htmlResponse('Player duel', <><h1>Invalid comparison period</h1><p>Select all time or a custom duration.</p></>, 400);
+  }
+  const isAllTime = rawPeriod === 'all';
   const rawDuration = url.searchParams.get('duration') ?? '30';
-  const duration = Number(rawDuration);
+  const duration = isAllTime ? 30 : Number(rawDuration);
   const rawDurationUnit = url.searchParams.get('durationUnit') ?? 'days';
-  if (
+  if (!isAllTime && (
     !/^\d+$/.test(rawDuration)
     || !Number.isSafeInteger(duration)
     || duration < 1
     || duration > MAX_CUSTOM_DURATION
     || !DURATION_UNITS.includes(rawDurationUnit as DurationUnit)
-  ) {
+  )) {
     return htmlResponse('Player duel', <><h1>Invalid comparison duration</h1><p>Choose between 1 and {MAX_CUSTOM_DURATION} days, weeks, months, or years.</p></>, 400);
   }
-  const durationUnit = rawDurationUnit as DurationUnit;
-  const dateRange = getDateRange(duration, durationUnit);
+  const durationUnit = isAllTime ? 'days' : rawDurationUnit as DurationUnit;
+  const dateRange = isAllTime
+    ? { startDate: null, endDate: null }
+    : getDateRange(duration, durationUnit);
   const page = parsePaginationPage(url);
   if (page === null) {
     return htmlResponse('Player duel', <><h1>Invalid page</h1><p>Page must be a positive integer.</p></>, 400);
@@ -133,7 +140,9 @@ export async function renderDuel(url: URL, data: WebsiteDataSource): Promise<Res
   ]);
   const firstUsername = names.get(firstAccountId) ?? firstName;
   const secondUsername = names.get(secondAccountId) ?? secondName;
-  const periodLabel = `Last ${duration} ${duration === 1 ? durationUnit.slice(0, -1) : durationUnit}`;
+  const periodLabel = isAllTime
+    ? 'All time'
+    : `Last ${duration} ${duration === 1 ? durationUnit.slice(0, -1) : durationUnit}`;
   const pageCount = Math.ceil(duel.total / DUEL_PAGE_SIZE);
   if (pageCount > 0 && page > pageCount) {
     const redirectUrl = new URL(url);
@@ -163,6 +172,7 @@ export async function renderDuel(url: URL, data: WebsiteDataSource): Promise<Res
       <form className="duel-period-form panel" action="/duel" method="get">
         <input type="hidden" name="player1" value={firstName} />
         <input type="hidden" name="player2" value={secondName} />
+        <input type="hidden" name="period" value="duration" />
         <div className="duel-duration-control">
           <span>Last</span>
           <input id="duel-duration" name="duration" type="number" min="1" max={MAX_CUSTOM_DURATION}
@@ -172,7 +182,12 @@ export async function renderDuel(url: URL, data: WebsiteDataSource): Promise<Res
             {DURATION_UNITS.map(unit => <option key={unit} value={unit}>{unit}</option>)}
           </select>
         </div>
-        <button type="submit">Update comparison</button>
+        <button type="submit">Compare duration</button>
+        <a className="duel-all-time-link"
+          href={`/duel?player1=${encodeURIComponent(firstName)}&player2=${encodeURIComponent(secondName)}&period=all`}
+          aria-current={isAllTime ? 'page' : undefined}>
+          {isAllTime ? 'All time selected' : 'All time'}
+        </a>
       </form>
       <section className="duel-scoreboard" aria-label="Head-to-head record">
       <div className="duel-contender duel-contender-first">
@@ -196,7 +211,7 @@ export async function renderDuel(url: URL, data: WebsiteDataSource): Promise<Res
     </section>
     <section className="duel-trends" aria-label="Rating trends">
       <div className="duel-results-heading">
-        <div><h2>Rating trends</h2><p>{`${periodLabel} rating history`}</p></div>
+        <div><h2>Rating trends</h2><p>{isAllTime ? 'All time · latest 500 eligible results' : `${periodLabel} rating history`}</p></div>
       </div>
       <div className="duel-trend-grid">
         <section className="panel"><h3>{firstUsername}</h3><RatingChart history={firstTrend} bands={[]} /></section>

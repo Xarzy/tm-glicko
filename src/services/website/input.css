@@ -81,6 +81,8 @@
   .duel-period-form input[type="number"], .duel-duration-control select { @apply rounded-lg border border-[#374456] bg-[#10151e] px-3 py-2 text-sm text-[#edf2f7]; }
   .duel-period-form input[type="number"] { @apply w-24; }
   .duel-period-form button { @apply cursor-pointer rounded-lg bg-[#45c9b5] px-3 py-2 text-sm font-bold text-[#081512] hover:bg-[#60d9c7]; }
+  .duel-all-time-link { @apply rounded-lg border border-[#374456] px-3 py-2 text-sm font-semibold text-[#d9e3ed] hover:border-[#45c9b5] hover:text-[#75d8ca]; }
+  .duel-all-time-link[aria-current="page"] { @apply border-[#45c9b5] text-[#75d8ca]; }
   .duel-trends { @apply mb-8; }
   .duel-trend-grid { @apply grid grid-cols-2 gap-4 max-[700px]:grid-cols-1; }
   .duel-trend-grid > .panel { @apply min-w-0; }
