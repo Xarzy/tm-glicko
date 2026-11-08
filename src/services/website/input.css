@@ -72,6 +72,7 @@
   .player-share-button[data-copy-state="error"] { @apply border-[#ff8c96]/60 text-[#ffb4bc]; }
   .player-share-status { @apply text-xs text-[#a4afbd]; }
   .duel-hero { @apply mx-auto mb-7 max-w-3xl; }
+  .duel-result-hero { @apply max-w-none; }
   .duel-hero h1 { @apply mt-2 mb-2 text-4xl max-[560px]:text-3xl; }
   .duel-hero .intro { @apply mb-0 text-lg; }
   .duel-eyebrow { @apply text-xs font-bold tracking-[0.18em] text-[#45c9b5]; }

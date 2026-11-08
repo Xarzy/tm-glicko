@@ -91,8 +91,8 @@ export async function renderDuel(url: URL, data: WebsiteDataSource): Promise<Res
     return Response.redirect(redirectUrl, 302);
   }
   return htmlResponse(`${firstUsername} vs ${secondUsername}`, <>
-    <p className="muted"><a href="/duel">← New matchup</a></p>
-    <div className="duel-hero">
+    <p className="muted mb-4"><a href="/duel">← New matchup</a></p>
+    <div className="duel-hero duel-result-hero">
       <span className="duel-eyebrow">HEAD-TO-HEAD</span>
       <h1>{firstUsername} <span className="duel-title-vs">vs</span> {secondUsername}</h1>
       <p className="intro">Who took the most shared Cups of the Day?</p>
