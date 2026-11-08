@@ -391,6 +391,7 @@ test('compares exact-match players using their shared COTD placements', async ()
     const html = await response.text();
     expect(response.status).toBe(200);
     expect(html).toContain('First Player vs Second Player');
+    expect(html).toContain('class="duel-hero duel-result-hero"');
     expect(html).toContain('class="duel-score">1 <span>–</span> 1</span>');
     expect(html).toContain('>1 tied cup</span>');
     expect(html).toContain('3 shared cups');
