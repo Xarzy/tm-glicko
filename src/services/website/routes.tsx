@@ -39,6 +39,19 @@ export function createWebsiteApp(data?: WebsiteDataSource) {
   });
 
   app.all('/health', context => context.json({ status: 'ok' }));
+  app.get('/favicon.ico', async context => {
+    const favicon = Bun.file(join(import.meta.dir, '../../../public/favicon.ico'));
+    if (!(await favicon.exists())) {
+      console.error('[web] Favicon is missing from public/favicon.ico.');
+      return context.text('Website favicon is unavailable.', 500);
+    }
+    return new Response(favicon, {
+      headers: {
+        'content-type': 'image/x-icon',
+        'cache-control': 'no-cache',
+      },
+    });
+  });
   app.get('/assets/site.css', async context => {
     const stylesheet = Bun.file(join(import.meta.dir, '../../../public/site.css'));
     if (!(await stylesheet.exists())) {

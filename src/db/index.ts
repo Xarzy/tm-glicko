@@ -1,6 +1,6 @@
 import { createClient, type Transaction } from '@libsql/client';
 import { drizzle } from 'drizzle-orm/libsql';
-import { inArray, isNotNull, isNull, asc, sql, eq, and, or, gt, gte } from 'drizzle-orm';
+import { inArray, isNotNull, isNull, asc, sql, eq, and, or, gt, gte, lte } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 import { retryDatabaseCall } from './retry';
 import * as schema from './schema';
@@ -81,6 +81,12 @@ if (!libsqlUrl) {
 
 export const db = drizzle(retryingClient, { schema });
 const CHUNK_SIZE = 1000;
+
+function isValidDateOnly(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
 
 const DEFAULT_STATE: Omit<SelectPlayerRatingState, 'accountId' | 'mode' | 'updatedAt'> = {
   rating: 1500,
@@ -778,9 +784,18 @@ export async function getRecentEligibleRatingHistory(
   accountId: string,
   limit = 120,
   mode: RatingMode = 'qualifying',
+  sinceDate: string | null = null,
+  untilDate: string | null = null,
 ): Promise<{ cupId: number; cotdDate: string; name: string; cardinal: number | null; rank: number | null; rating: number; ratingChange: number | null }[]> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
     throw new Error('Rating history limit must be an integer between 1 and 500.');
+  }
+  if ((sinceDate !== null && !isValidDateOnly(sinceDate))
+    || (untilDate !== null && !isValidDateOnly(untilDate))) {
+    throw new Error('Rating history date bounds must use valid YYYY-MM-DD dates.');
+  }
+  if (sinceDate && untilDate && sinceDate > untilDate) {
+    throw new Error('Rating history start date must be on or before the end date.');
   }
 
   const eligibleHistory = db.$with('eligible_history').as(
@@ -824,7 +839,11 @@ export async function getRecentEligibleRatingHistory(
   })
     .from(eligibleHistory)
     .innerJoin(cotdDaysTable, eq(cotdDaysTable.cupId, eligibleHistory.cupId))
-    .where(gte(eligibleHistory.completedCotds, MIN_RANKED_COTDS))
+    .where(and(
+      gte(eligibleHistory.completedCotds, MIN_RANKED_COTDS),
+      sinceDate ? gte(eligibleHistory.cotdDate, sinceDate) : undefined,
+      untilDate ? lte(eligibleHistory.cotdDate, untilDate) : undefined,
+    ))
     .orderBy(sql`${eligibleHistory.cotdDate} DESC`, sql`${eligibleHistory.id} DESC`)
     .limit(limit);
 
@@ -924,6 +943,8 @@ export async function getDuelCupResults(
   secondAccountId: string,
   limit = 20,
   offset = 0,
+  sinceDate: string | null = null,
+  untilDate: string | null = null,
 ): Promise<{
   results: { cupId: number; cotdDate: string; name: string; firstRank: number; secondRank: number }[];
   total: number;
@@ -937,9 +958,22 @@ export async function getDuelCupResults(
   if (!Number.isSafeInteger(offset) || offset < 0) {
     throw new Error('Duel result offset must be a non-negative safe integer.');
   }
+  if (sinceDate !== null && !isValidDateOnly(sinceDate)) {
+    throw new Error('Duel start date must use YYYY-MM-DD format.');
+  }
+  if (untilDate !== null && !isValidDateOnly(untilDate)) {
+    throw new Error('Duel end date must use YYYY-MM-DD format.');
+  }
+  if (sinceDate && untilDate && sinceDate > untilDate) {
+    throw new Error('Duel start date must be on or before the end date.');
+  }
 
   const firstHistory = alias(playerRatingHistoryTable, 'first_history');
   const secondHistory = alias(playerRatingHistoryTable, 'second_history');
+  const dateFilters = [
+    sinceDate ? gte(firstHistory.cotdDate, sinceDate) : undefined,
+    untilDate ? lte(firstHistory.cotdDate, untilDate) : undefined,
+  ];
 
   const [countRows, pageRows] = await Promise.all([
     db.select({
@@ -961,6 +995,7 @@ export async function getDuelCupResults(
         eq(firstHistory.mode, 'qualifying'),
         isNotNull(firstHistory.rank),
         isNotNull(cotdDaysTable.processedAt),
+        ...dateFilters,
       )),
     db.select({
       cupId: firstHistory.cupId,
@@ -982,6 +1017,7 @@ export async function getDuelCupResults(
         eq(firstHistory.mode, 'qualifying'),
         isNotNull(firstHistory.rank),
         isNotNull(cotdDaysTable.processedAt),
+        ...dateFilters,
       ))
       .orderBy(sql`${cotdDaysTable.startDate} DESC`, sql`${firstHistory.cupId} DESC`)
       .limit(limit)

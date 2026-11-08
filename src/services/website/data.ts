@@ -122,6 +122,11 @@ export interface WebsiteDuelCupPage {
   draws: number;
 }
 
+export interface WebsiteDuelDateRange {
+  startDate: string | null;
+  endDate: string | null;
+}
+
 export interface WebsiteDailyUpdateStatus {
   latestRun: { id: number; status: 'running' | 'succeeded' | 'failed'; startedAt: Date; completedAt: Date | null } | null;
   lastSuccessfulRun: { id: number; status: 'running' | 'succeeded' | 'failed'; startedAt: Date; completedAt: Date | null } | null;
@@ -139,7 +144,8 @@ export interface WebsiteDataSource {
   getPlayerProfile(accountId: string): Promise<WebsitePlayerProfile | null>;
   getPlayerCotdResults(accountId: string, page: number, limit: number): Promise<{ results: WebsitePlayerCotdResult[]; total: number }>;
   getCotdDetail(cupId: number): Promise<{ day: SelectCotdDay; results: WebsiteCotdResult[] } | null>;
-  getDuelCupResults(firstAccountId: string, secondAccountId: string, page: number, limit: number): Promise<WebsiteDuelCupPage>;
+  getPlayerRatingTrend(accountId: string, dateRange: WebsiteDuelDateRange): Promise<WebsitePlayerHistoryPoint[]>;
+  getDuelCupResults(firstAccountId: string, secondAccountId: string, page: number, limit: number, dateRange: WebsiteDuelDateRange): Promise<WebsiteDuelCupPage>;
 }
 
 async function getDisplayNames(accountIds: string[]): Promise<Map<string, string>> {
@@ -281,6 +287,14 @@ async function getPlayerProfile(accountId: string): Promise<WebsitePlayerProfile
   };
 }
 
+async function getPlayerRatingTrend(
+  accountId: string,
+  dateRange: WebsiteDuelDateRange,
+): Promise<WebsitePlayerHistoryPoint[]> {
+  return timeWebStage('duel player rating trend query', () =>
+    getRecentEligibleRatingHistory(accountId, 500, 'qualifying', dateRange.startDate, dateRange.endDate));
+}
+
 async function getCotdDetail(cupId: number) {
   const day = await getCotdDayById(cupId);
   if (!day?.processedAt) return null;
@@ -307,10 +321,11 @@ async function getDuelCupResultsPage(
   secondAccountId: string,
   page: number,
   limit: number,
+  dateRange: WebsiteDuelDateRange,
 ) {
   const offset = (page - 1) * limit;
   return timeWebStage('player duel COTD page query', () =>
-    getDuelCupResults(firstAccountId, secondAccountId, limit, offset));
+    getDuelCupResults(firstAccountId, secondAccountId, limit, offset, dateRange.startDate, dateRange.endDate));
 }
 
 export const websiteData: WebsiteDataSource = {
@@ -325,5 +340,6 @@ export const websiteData: WebsiteDataSource = {
   getPlayerProfile,
   getPlayerCotdResults: getPlayerCotdResultsFromDatabase,
   getCotdDetail,
+  getPlayerRatingTrend,
   getDuelCupResults: getDuelCupResultsPage,
 };

@@ -73,6 +73,18 @@
   .player-share-status { @apply text-xs text-[#a4afbd]; }
   .duel-hero { @apply mx-auto mb-7 max-w-3xl; }
   .duel-result-hero { @apply max-w-none; }
+  .duel-share { @apply mb-5; }
+  .duel-period-form { @apply mb-5 flex flex-wrap items-end gap-3 border-[#34404e] p-4; }
+  .duel-period-form label { @apply text-sm font-semibold text-[#c5ccd5]; }
+  .duel-period-form select { @apply rounded-lg border border-[#374456] bg-[#10151e] px-3 py-2 text-[#edf2f7]; }
+  .duel-duration-control { @apply flex items-center gap-2 text-sm font-semibold text-[#c5ccd5]; }
+  .duel-period-form input[type="number"], .duel-duration-control select { @apply rounded-lg border border-[#374456] bg-[#10151e] px-3 py-2 text-sm text-[#edf2f7]; }
+  .duel-period-form input[type="number"] { @apply w-24; }
+  .duel-period-form button { @apply cursor-pointer rounded-lg bg-[#45c9b5] px-3 py-2 text-sm font-bold text-[#081512] hover:bg-[#60d9c7]; }
+  .duel-trends { @apply mb-8; }
+  .duel-trend-grid { @apply grid grid-cols-2 gap-4 max-[700px]:grid-cols-1; }
+  .duel-trend-grid > .panel { @apply min-w-0; }
+  .duel-trend-grid h3 { @apply mt-0 mb-3 break-words text-base; }
   .duel-hero h1 { @apply mt-2 mb-2 text-4xl max-[560px]:text-3xl; }
   .duel-hero .intro { @apply mb-0 text-lg; }
   .duel-eyebrow { @apply text-xs font-bold tracking-[0.18em] text-[#45c9b5]; }

@@ -72,6 +72,7 @@ DISCORD_BOT_TOKEN=your_discord_bot_token
 DISCORD_BOT_CLIENT_ID=your_discord_application_id
 DISCORD_GUILD_IDS=optional_test_guild_id,another_test_guild_id
 DB_FILE_NAME=local.db
+WEBSITE_BASE_URL=https://your-public-website.example
 # Optional: set these to use a hosted LibSQL database instead of local SQLite.
 LIBSQL_URL=
 LIBSQL_AUTH_TOKEN=
@@ -137,6 +138,7 @@ The bot registers slash commands from `src/commands/`:
 ## Website
 
 - `/` and `/leaderboard` — browse the eligible-player leaderboard by page, filter by competitive rank, find an exact Trackmania username, or search cached display names for partial matches
+- `/duel` — compare shared COTD results over a customizable “last N days, weeks, months, or years” duration; view win rates and rating trends, and copy a comparison link
 - `/players/:accountId` — shareable player profile with rank, rating, COTD division estimate, eligible-era peak, recent placements, and rating history
 - `/cotd` — browse recent processed COTDs
 - `/cotd/:cupId` — view the top 100 available placements for a COTD
@@ -153,6 +155,8 @@ the 250 highest-rated eligible players) and caches any names it finds. Daily
 updates also backfill missing names and refresh names for new COTD participants.
 Trackmania OAuth credentials are required for these lookups; without them,
 cached names remain available and account IDs are used for uncached players.
+Set `WEBSITE_BASE_URL` to the public website origin to enable profile and COTD
+links in Discord command results.
 
 Run a one-time backfill for all known players with:
 

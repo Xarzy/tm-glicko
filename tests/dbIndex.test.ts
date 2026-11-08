@@ -428,6 +428,20 @@ test('duel results include only shared placements from processed COTDs', async (
     secondWins: 1,
     draws: 0,
   });
+  expect(await database.getDuelCupResults('first', 'second', 20, 0, '2026-10-02')).toEqual({
+    results: [{ cupId: 2, cotdDate: '2026-10-02', name: 'COTD 2', firstRank: 20, secondRank: 5 }],
+    total: 1,
+    firstWins: 0,
+    secondWins: 1,
+    draws: 0,
+  });
+  expect(await database.getDuelCupResults('first', 'second', 20, 0, '2026-10-01', '2026-10-01')).toEqual({
+    results: [{ cupId: 1, cotdDate: '2026-10-01', name: 'COTD 1', firstRank: 8, secondRank: 12 }],
+    total: 1,
+    firstWins: 1,
+    secondWins: 0,
+    draws: 0,
+  });
   expect(await database.getDuelCupResults('first', 'missing')).toEqual({
     results: [],
     total: 0,
@@ -436,6 +450,8 @@ test('duel results include only shared placements from processed COTDs', async (
     draws: 0,
   });
   await expect(database.getDuelCupResults('first', 'second', 0)).rejects.toThrow('page size');
+  await expect(database.getDuelCupResults('first', 'second', 20, 0, '2026/10/02')).rejects.toThrow('YYYY-MM-DD');
+  await expect(database.getDuelCupResults('first', 'second', 20, 0, '2026-10-05', '2026-10-02')).rejects.toThrow('on or before');
 });
 
 test('player COTD result pages include eligible, unflagged cups and report the total', async () => {

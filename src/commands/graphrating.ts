@@ -2,6 +2,7 @@ import {
   SlashCommandBuilder,
   ChatInputCommandInteraction,
   AttachmentBuilder,
+  escapeMarkdown,
 } from 'discord.js';
 import { Resvg } from '@resvg/resvg-js';
 import { existsSync, readFileSync } from 'node:fs';
@@ -11,6 +12,7 @@ import { findAccountIdsByUsernames } from '../services/accountLookup';
 import { getRatingHistoryForAccounts, getStatesForAccounts } from '../db';
 import { MIN_RANKED_COTDS } from '../db/schema';
 import { getRankThresholdBands, type RankThresholdBand } from '../services/rankService';
+import { getPlayerProfileUrl } from '../services/discordWebLinks';
 
 const IMAGES_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../images');
 const rankIconDataUriCache = new Map<string, string | null>();
@@ -226,6 +228,17 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   if (notFound.length > 0) {
     const notFoundText = `*(Could not find: ${notFound.map(n => `\`${n}\``).join(', ')})*`;
     replyText = replyText ? `${replyText}\n${notFoundText}` : notFoundText;
+  }
+  const profileLinks = playerSeries.slice(0, 10).flatMap(player => {
+    const profileUrl = getPlayerProfileUrl(player.accountId);
+    return profileUrl
+      ? [`[${escapeMarkdown(player.username)}](${profileUrl})`]
+      : [];
+  });
+  if (profileLinks.length > 0) {
+    const additionalPlayers = playerSeries.length - profileLinks.length;
+    const linksText = `Web profiles: ${profileLinks.join(' · ')}${additionalPlayers > 0 ? ` · +${additionalPlayers} more` : ''}`;
+    replyText = replyText ? `${replyText}\n${linksText}` : linksText;
   }
 
   await interaction.editReply({
