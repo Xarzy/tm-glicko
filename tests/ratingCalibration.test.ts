@@ -5,6 +5,7 @@ import {
   getRatingSeedRanks,
   isLikelyAbandonedQualifyingRun,
   prepareQualifyingState,
+  QUALIFYING_RATING_CONFIG,
   updateEligiblePeakRating,
 } from '../src/services/glickoService';
 import { advanceGlickoRd } from '../src/services/glicko2Math';
@@ -75,6 +76,35 @@ test('a qualifying result updates rating and keeps uncertainty in the valid rang
   expect(Number.isFinite(updated.rd)).toBe(true);
   expect(updated.rd).toBeGreaterThanOrEqual(30);
   expect(updated.rd).toBeLessThanOrEqual(350);
+});
+
+test('representative opponent sampling preserves ratings at the start, middle, and end of a field', () => {
+  const opponents = Array.from({ length: 40 }, (_, index) => ({
+    player: `p${index}`,
+    rank: index + 1,
+    rating: 1400 + (index * 37 % 500),
+    rd: 70 + (index * 11 % 100),
+  }));
+  const config = { ...QUALIFYING_RATING_CONFIG, representativeCount: 5 };
+  const expectedRatings = [
+    1412.6247621522905,
+    1550.4602804943818,
+    1822.5615116120944,
+  ];
+
+  for (const [resultIndex, playerIndex] of [0, 17, 39].entries()) {
+    const player = opponents[playerIndex];
+    const updated = applyQualifyingCupResult(
+      { rating: player.rating, rd: player.rd, vol: 0.06, matchCount: 30 },
+      player.player,
+      player.rank,
+      opponents,
+      playerIndex,
+      config,
+    );
+
+    expect(updated.rating).toBeCloseTo(expectedRatings[resultIndex], 10);
+  }
 });
 
 test('flags an experienced high-Elo player whose rank exceeds the Elo-scaled cutoff', () => {

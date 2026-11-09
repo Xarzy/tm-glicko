@@ -251,17 +251,18 @@ function selectRepresentatives(
   participants: ParticipantRank[],
   config: QualifyingRatingConfig,
 ): Array<{ participant: ParticipantRank; representedCount: number }> {
-  const eligible = participants.filter((_, index) => index !== playerIndex);
-  const count = Math.min(config.representativeCount, eligible.length);
+  const eligibleCount = participants.length - 1;
+  const count = Math.min(config.representativeCount, eligibleCount);
   if (count === 0) return [];
 
   const representatives: Array<{ participant: ParticipantRank; representedCount: number }> = [];
   for (let bucket = 0; bucket < count; bucket++) {
-    const start = Math.floor(bucket * eligible.length / count);
-    const end = Math.floor((bucket + 1) * eligible.length / count);
+    const start = Math.floor(bucket * eligibleCount / count);
+    const end = Math.floor((bucket + 1) * eligibleCount / count);
     const bucketSize = Math.max(1, end - start);
     const middle = start + Math.floor((bucketSize - 1) / 2);
-    representatives.push({ participant: eligible[middle], representedCount: bucketSize });
+    const participantIndex = middle >= playerIndex ? middle + 1 : middle;
+    representatives.push({ participant: participants[participantIndex], representedCount: bucketSize });
   }
   return representatives;
 }
