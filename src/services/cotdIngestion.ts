@@ -21,7 +21,6 @@ import {
   getCupsNeedingLeaderboards,
   batchInsertRatingHistory,
 } from '../db';
-import { refreshPlayerDisplayNames } from './playerDisplayNames';
 import type { SelectCotdDay } from '../db/schema';
 
 const DEFAULT_STATE = {
@@ -267,7 +266,6 @@ async function processCotdDay(day: SelectCotdDay) {
   await markCotdDayProcessed(day.cupId, cardinal);
 
   console.log(`[ingest] cup ${day.cupId} (${day.name}) — ${allResults.length}/${cardinal} participants`);
-  await refreshPlayerDisplayNames(allResults.map(result => result.player));
 }
 
 export async function discoverNewCotdDays(): Promise<number> {
